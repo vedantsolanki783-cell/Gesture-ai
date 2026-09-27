@@ -4,7 +4,7 @@ import type { CustomGesture, Landmark, VisionResult } from '../types';
 // Loaded from Google's/jsDelivr's public CDNs so no manual file download or
 // build-time asset placement is needed. The browser caches both after first
 // load, so the app keeps working offline on repeat visits (same device).
-const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm';
+const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
 const MODEL_PATH = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
 let landmarkerPromise: Promise<HandLandmarker> | null = null;
