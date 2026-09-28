@@ -10,7 +10,7 @@ import './styles.css';
 const defaults: AppSettings = {
   theme: 'dark', voiceEnabled: true, visionEnabled: false, confidenceThreshold: 0.72,
   aiProvider: 'cloudFree', ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen3:4b', geminiModel: 'gemini-2.5-flash',
-  cloudFreeBaseUrl: 'https://api.groq.com/openai/v1', cloudFreeApiKey: '', cloudFreeModel: 'llama-3.3-70b-versatile',
+ webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
   systemInstruction: 'You are NOVA, a concise and helpful assistant designed for people who use sign language. Be clear, respectful and fast.', customGestures: []
 };
 
