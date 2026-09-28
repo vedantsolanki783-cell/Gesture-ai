@@ -1,11 +1,15 @@
-const CACHE = 'nova-gesture-v1';
+const CACHE = 'nova-gesture-v2';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil((async () => {
+    const names = await caches.keys();
+    await Promise.all(names.filter(n => n !== CACHE).map(n => caches.delete(n)));
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener('fetch', (event) => {
@@ -29,13 +33,13 @@ self.addEventListener('fetch', (event) => {
         }
       }
 
-      const cached = await cache.match(req);
-      if (cached) return cached;
       try {
-        const fresh = await fetch(req, { mode: req.mode === 'navigate' ? 'same-origin' : 'no-cors' });
-        cache.put(req, fresh.clone());
+        const fresh = await fetch(req);
+        if (fresh && fresh.ok) cache.put(req, fresh.clone());
         return fresh;
       } catch (err) {
+        const cached = await cache.match(req);
+        if (cached) return cached;
         throw err;
       }
     })()
