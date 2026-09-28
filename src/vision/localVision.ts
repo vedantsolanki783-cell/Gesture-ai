@@ -54,7 +54,7 @@ function isOnlyMiddleFinger(lm: Landmark[]): boolean {
 
 function triggerInputAction(action: 'CLEAR' | 'SEND') {
   const now = Date.now();
-  if (now - lastActionTime < 1200) return;
+  if (now - lastActionTime < 1500) return;
   lastActionTime = now;
 
   const inputEl = document.querySelector(
@@ -165,7 +165,7 @@ function classifyRaw(lm: Landmark[]): VisionResult {
   return { type: 'UNKNOWN', value: '', confidence: 0.2, source: 'local' };
 }
 
-// Slightly slower, more deliberate timing window (requires holding a sign steady before registering)
+// Slower, deliberate gate: Requires holding a sign steady for ~1 second before registering
 function stabilizeAndGate(raw: VisionResult): VisionResult {
   const now = Date.now();
   if (raw.type === 'UNKNOWN' || !raw.value) return raw;
@@ -173,19 +173,19 @@ function stabilizeAndGate(raw: VisionResult): VisionResult {
   if (raw.value !== lockedSign) {
     lockedSign = raw.value;
     signFirstSeenAt = now;
-    lockCooldownUntil = now + 600; // Requires holding steady for 600ms before typing
+    lockCooldownUntil = now + 950; // Requires holding steady for 950ms
     return raw;
   }
 
   if (now <= lockCooldownUntil) return raw;
 
-  // 1.4 second pause before allowing the same letter to repeat
-  if (now - signFirstSeenAt < 1400) {
+  // 2.0 second pause before allowing the same letter to repeat
+  if (now - signFirstSeenAt < 2000) {
     return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
   }
 
   signFirstSeenAt = now;
-  lockCooldownUntil = now + 600;
+  lockCooldownUntil = now + 950;
   return raw;
 }
 
