@@ -1,4 +1,5 @@
 import type { Message, AppSettings } from '../types';
+import { chatWebLLM } from './webllm';
 
 function ollamaUrl(base: string) {
   return `${base.replace(/\/$/, '')}/v1/chat/completions`;
@@ -48,6 +49,12 @@ export async function generateLocalOrCloud(
     return data?.choices?.[0]?.message?.content?.trim() || 'The model returned no text.';
   };
 
+  const tryWebLLM = async () => {
+    return chatWebLLM(messages as { role: string; content: string }[], settings.webllmModel || 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', (text) => {
+      window.dispatchEvent(new CustomEvent('nova-webllm-progress', { detail: text }));
+    });
+  };
+
   const tryGemini = async () => {
     const key = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
     if (!key) throw new Error('VITE_GEMINI_API_KEY is not configured');
@@ -78,6 +85,11 @@ export async function generateLocalOrCloud(
   if (settings.aiProvider === 'cloudFree') {
     try { return { text: await tryCloudFree(), provider: `Cloud (free tier) • ${settings.cloudFreeModel}` }; }
     catch (e) { return { text: `Cloud AI error: ${String(e)}`, provider: 'Cloud error' }; }
+  }
+
+  if (settings.aiProvider === 'webllm') {
+    try { return { text: await tryWebLLM(), provider: `On-device • ${settings.webllmModel}` }; }
+    catch (e) { return { text: `On-device AI error: ${String(e)}`, provider: 'On-device error' }; }
   }
 
   // Auto: local Ollama first (if running), then the free-tier cloud key, then Gemini.
