@@ -4,6 +4,12 @@ import type { CustomGesture, Landmark, VisionResult } from '../types';
 const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const MODEL_PATH = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
+// Speed controls (in milliseconds):
+// 1. HOLD_TIME_MS: How long you must hold a sign steady BEFORE it types (1200ms = 1.2 seconds)
+// 2. REPEAT_COOLDOWN_MS: Pause after typing a letter before the same sign can repeat (2200ms = 2.2 seconds)
+const HOLD_TIME_MS = 1200;
+const REPEAT_COOLDOWN_MS = 2200;
+
 let landmarkerPromise: Promise<HandLandmarker> | null = null;
 let lastVideoTime = -1;
 let mouselessMode = false;
@@ -11,10 +17,12 @@ let lastToggleTime = 0;
 let lastClickTime = 0;
 let lastActionTime = 0;
 
-let lockedSign = '';
-let signFirstSeenAt = 0;
-let lockCooldownUntil = 0;
-let framesWithoutHand = 0;
+// Hold-to-type state
+let candidateSign = '';
+let candidateStartTime = 0;
+let hasEmittedCurrentHold = false;
+let lastEmitTime = 0;
+let mismatchFrames = 0;
 
 async function getLandmarker() {
   if (!landmarkerPromise) {
@@ -104,16 +112,18 @@ function classifyRaw(lm: Landmark[]): VisionResult {
 
   const allFingersClosed = !indexOpen && !middleOpen && !ringOpen && !pinkyOpen;
   const thumbPointingDown = lm[4].y > lm[3].y && lm[4].y > lm[5].y + 0.03 && lm[4].y > lm[0].y + 0.04;
+
+  // 1. Thumbs Down -> CLEAR
   if (thumbPointingDown && allFingersClosed) {
-    triggerInputAction('CLEAR');
     return { type: 'GESTURE', value: 'CLEAR', confidence: 0.95, source: 'local' };
   }
 
+  // 2. Yo-Yo Sign (Index + Pinky) -> SEND
   if (indexOpen && !middleOpen && !ringOpen && pinkyOpen) {
-    triggerInputAction('SEND');
     return { type: 'GESTURE', value: 'SEND', confidence: 0.95, source: 'local' };
   }
 
+  // 3. Fist / Curled fingers -> A, E, M, N, O, S, T, C, X
   if (allFingersClosed) {
     if (indexHalf) {
       if (thumbOpen && thumbIndex > 0.08) return { type: 'LETTER', value: 'C', confidence: 0.86, source: 'local' };
@@ -129,16 +139,21 @@ function classifyRaw(lm: Landmark[]): VisionResult {
     return { type: 'LETTER', value: 'S', confidence: 0.86, source: 'local' };
   }
 
+  // 4. All 4 fingers open -> B
   if (indexOpen && middleOpen && ringOpen && pinkyOpen) return { type: 'LETTER', value: 'B', confidence: 0.92, source: 'local' };
+
+  // 5. Three fingers open -> W or F
   if (indexOpen && middleOpen && ringOpen && !pinkyOpen) return { type: 'LETTER', value: 'W', confidence: 0.92, source: 'local' };
   if (!indexOpen && middleOpen && ringOpen && pinkyOpen) return { type: 'LETTER', value: 'F', confidence: 0.9, source: 'local' };
 
+  // 6. Only Pinky open -> Y, J, I
   if (!indexOpen && !middleOpen && !ringOpen && pinkyOpen) {
     if (thumbOpen) return { type: 'LETTER', value: 'Y', confidence: 0.92, source: 'local' };
     const pinkyTilted = Math.abs(lm[20].x - lm[17].x) > Math.abs(lm[20].y - lm[17].y) * 0.65;
     return { type: 'LETTER', value: pinkyTilted ? 'J' : 'I', confidence: 0.88, source: 'local' };
   }
 
+  // 7. Index + Middle open -> H, P, R, K, V, U
   if (indexOpen && middleOpen && !ringOpen && !pinkyOpen) {
     if (horizontal) {
       const pointingDown = lm[12].y > lm[8].y + 0.04 || lm[8].y > lm[0].y;
@@ -152,6 +167,7 @@ function classifyRaw(lm: Landmark[]): VisionResult {
     return { type: 'LETTER', value: 'U', confidence: 0.88, source: 'local' };
   }
 
+  // 8. Only Index open -> G, Q, L, D, Z
   if (indexOpen && !middleOpen && !ringOpen && !pinkyOpen) {
     if (horizontal) {
       const pointingDown = lm[8].y > lm[0].y;
@@ -165,28 +181,58 @@ function classifyRaw(lm: Landmark[]): VisionResult {
   return { type: 'UNKNOWN', value: '', confidence: 0.2, source: 'local' };
 }
 
-// Slower, deliberate gate: Requires holding a sign steady for ~1 second before registering
+// True Hold-Before-Trigger Gate:
+// Waits HOLD_TIME_MS (1.2s) of steady holding BEFORE emitting 1 single letter
 function stabilizeAndGate(raw: VisionResult): VisionResult {
   const now = Date.now();
-  if (raw.type === 'UNKNOWN' || !raw.value) return raw;
+  const empty: VisionResult = { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
 
-  if (raw.value !== lockedSign) {
-    lockedSign = raw.value;
-    signFirstSeenAt = now;
-    lockCooldownUntil = now + 950; // Requires holding steady for 950ms
+  if (raw.type === 'UNKNOWN' || !raw.value) {
+    mismatchFrames++;
+    if (mismatchFrames > 4) {
+      candidateSign = '';
+      hasEmittedCurrentHold = false;
+    }
+    return empty;
+  }
+
+  // New sign started: begin the 1.2-second hold timer (do NOT emit yet!)
+  if (raw.value !== candidateSign) {
+    mismatchFrames++;
+    if (mismatchFrames > 2 || !candidateSign) {
+      candidateSign = raw.value;
+      candidateStartTime = now;
+      hasEmittedCurrentHold = false;
+      mismatchFrames = 0;
+    }
+    return empty;
+  }
+
+  mismatchFrames = 0;
+
+  // Still holding, but hasn't reached 1.2 seconds yet -> wait
+  if (!hasEmittedCurrentHold) {
+    if (now - candidateStartTime < HOLD_TIME_MS) {
+      return empty;
+    }
+
+    // Held steady for 1.2 seconds! Emit on this SINGLE frame only
+    hasEmittedCurrentHold = true;
+    lastEmitTime = now;
+    if (raw.value === 'CLEAR') triggerInputAction('CLEAR');
+    if (raw.value === 'SEND') triggerInputAction('SEND');
     return raw;
   }
 
-  if (now <= lockCooldownUntil) return raw;
-
-  // 2.0 second pause before allowing the same letter to repeat
-  if (now - signFirstSeenAt < 2000) {
-    return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
+  // Already emitted this sign: wait REPEAT_COOLDOWN_MS (2.2s) before allowing another emit
+  if (now - lastEmitTime >= REPEAT_COOLDOWN_MS) {
+    lastEmitTime = now;
+    if (raw.value === 'CLEAR') triggerInputAction('CLEAR');
+    if (raw.value === 'SEND') triggerInputAction('SEND');
+    return raw;
   }
 
-  signFirstSeenAt = now;
-  lockCooldownUntil = now + 950;
-  return raw;
+  return empty;
 }
 
 export async function localVision(video: HTMLVideoElement, timestamp: number): Promise<VisionResult> {
@@ -205,11 +251,13 @@ export async function localVision(video: HTMLVideoElement, timestamp: number): P
     const now = Date.now();
 
     if (hands.length === 0) {
-      framesWithoutHand++;
-      if (framesWithoutHand > 2) lockedSign = '';
+      mismatchFrames++;
+      if (mismatchFrames > 4) {
+        candidateSign = '';
+        hasEmittedCurrentHold = false;
+      }
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
-    framesWithoutHand = 0;
 
     if (hands.length >= 2 && isOnlyMiddleFinger(hands[0]) && isOnlyMiddleFinger(hands[1])) {
       if (now - lastToggleTime > 1500) {
