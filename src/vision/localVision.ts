@@ -16,7 +16,6 @@ let signFirstSeenAt = 0;
 let lockCooldownUntil = 0;
 let framesWithoutHand = 0;
 
-// Instant initialization so the camera opens right away
 async function getLandmarker() {
   if (!landmarkerPromise) {
     landmarkerPromise = FilesetResolver.forVisionTasks(WASM_PATH).then((vision) =>
@@ -55,7 +54,7 @@ function isOnlyMiddleFinger(lm: Landmark[]): boolean {
 
 function triggerInputAction(action: 'CLEAR' | 'SEND') {
   const now = Date.now();
-  if (now - lastActionTime < 900) return;
+  if (now - lastActionTime < 1200) return;
   lastActionTime = now;
 
   const inputEl = document.querySelector(
@@ -166,7 +165,7 @@ function classifyRaw(lm: Landmark[]): VisionResult {
   return { type: 'UNKNOWN', value: '', confidence: 0.2, source: 'local' };
 }
 
-// Balanced gate: Fast enough to type naturally, long enough to prevent accidental double-typing
+// Slightly slower, more deliberate timing window (requires holding a sign steady before registering)
 function stabilizeAndGate(raw: VisionResult): VisionResult {
   const now = Date.now();
   if (raw.type === 'UNKNOWN' || !raw.value) return raw;
@@ -174,19 +173,19 @@ function stabilizeAndGate(raw: VisionResult): VisionResult {
   if (raw.value !== lockedSign) {
     lockedSign = raw.value;
     signFirstSeenAt = now;
-    lockCooldownUntil = now + 350; // Balanced recognition window
+    lockCooldownUntil = now + 600; // Requires holding steady for 600ms before typing
     return raw;
   }
 
   if (now <= lockCooldownUntil) return raw;
 
-  // 900ms pause before allowing the same letter to repeat
-  if (now - signFirstSeenAt < 900) {
+  // 1.4 second pause before allowing the same letter to repeat
+  if (now - signFirstSeenAt < 1400) {
     return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
   }
 
   signFirstSeenAt = now;
-  lockCooldownUntil = now + 350;
+  lockCooldownUntil = now + 600;
   return raw;
 }
 
