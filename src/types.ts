@@ -28,13 +28,14 @@ export interface AppSettings {
   voiceEnabled: boolean;
   visionEnabled: boolean;
   confidenceThreshold: number;
-  aiProvider: 'ollama' | 'gemini' | 'cloudFree' | 'auto';
+  aiProvider: 'ollama' | 'gemini' | 'cloudFree' | 'webllm' | 'auto';
   ollamaUrl: string;
   ollamaModel: string;
   geminiModel: string;
   cloudFreeBaseUrl: string;
   cloudFreeApiKey: string;
   cloudFreeModel: string;
+  webllmModel: string;
   systemInstruction: string;
   customGestures: CustomGesture[];
 }
