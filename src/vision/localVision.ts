@@ -248,8 +248,7 @@ export async function localVision(video: HTMLVideoElement, timestamp: number): P
 
     if (hands.length >= 2 && isOnlyMiddleFinger(hands[0]) && isOnlyMiddleFinger(hands[1])) {
       if (now - lastToggleTime > 1200) {
-        mouselessMode = !mouselessMode;
-        lastToggleTime = now;
+          window.dispatchEvent(new CustomEvent('nova-mouseless-toggle', { detail: mouselessMode }));
       }
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
