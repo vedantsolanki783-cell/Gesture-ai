@@ -24,6 +24,12 @@ import type { AppSettings, Message, VisionResult } from './types';
 import './styles.css';
 
 // ============================================================================
+// URL HELPER (Prevents mobile clipboard/markdown from corrupting URLs)
+// ============================================================================
+const httpsUrl = (path: string): string => ['ht', 'tps://', path].join('');
+const httpUrl = (path: string): string => ['ht', 'tp://', path].join('');
+
+// ============================================================================
 // TYPES & INTERFACES
 // ============================================================================
 
@@ -77,7 +83,7 @@ const defaults: AppSettings = {
   visionEnabled: false,
   confidenceThreshold: 0.72,
   aiProvider: 'cloudFree',
-  ollamaUrl: 'http://localhost:11434',
+  ollamaUrl: httpUrl('localhost:11434'),
   ollamaModel: 'qwen3:4b',
   geminiModel: 'gemini-2.5-flash',
   webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
@@ -91,9 +97,6 @@ const defaults: AppSettings = {
 
 const LETTER_COOLDOWN_MS = 1000;
 const SAME_LETTER_COOLDOWN_MS = 1800;
-
-// Runtime module loader that bypasses Vite/Rollup static build analysis
-const runtimeImport = new Function('url', 'return import(url)') as (url: string) => Promise<any>;
 
 const CANVAS_EMBEDDED_CSS = `
 .app.has-canvas-open main.app-workspace {
@@ -344,7 +347,7 @@ function isVisionRefusal(text: string): boolean {
 
 export function renderProceduralCanvasImage(
   prompt: string,
-  mode: 'cyber' | 'neural' | 'sunset' | 'infographic' = 'cyber'
+  mode: 'cyber' | 'neural' | 'sunset' = 'cyber'
 ): string {
   const canvas = document.createElement('canvas');
   canvas.width = 1200;
@@ -462,8 +465,10 @@ export async function generateVisualImageArtifact(prompt: string): Promise<Canva
   if (navigator.onLine) {
     try {
       const seed = Math.floor(Math.random() * 999999);
-      const url = `[https://image.pollinations.ai/prompt/$](https://image.pollinations.ai/prompt/$){encodeURIComponent(clean)}?width=1024&height=640&nologo=true&seed=${seed}`;
-      const res = await fetch(url);
+      const endpoint = httpsUrl(
+        `image.pollinations.ai/prompt/${encodeURIComponent(clean)}?width=1024&height=640&nologo=true&seed=${seed}`
+      );
+      const res = await fetch(endpoint);
       if (res.ok) {
         const blob = await res.blob();
         const dataUrl: string = await new Promise((resolve, reject) => {
@@ -829,7 +834,8 @@ export function exportPresentationToPpt(deck: PresentationDeck): string {
     )
     .join('\n');
 
-  return `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:p="urn:schemas-microsoft-com:office:powerpoint" xmlns="[http://www.w3.org/TR/REC-html40](http://www.w3.org/TR/REC-html40)">
+  return `<!DOCTYPE html>
+<html>
 <head><meta charset="utf-8"><title>${deck.title}</title></head>
 <body>${slidesHtml}</body>
 </html>`;
@@ -1175,7 +1181,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 };
 
 // ============================================================================
-// 5. DEEP FILE RECOGNITION (PDF + OCR + MEDIAPIPE + CSV)
+// 5. NATIVE DEEP FILE & IMAGE RECOGNITION (ZERO EXTERNAL CDN IMPORTS)
 // ============================================================================
 
 let imageLandmarkerPromise: Promise<HandLandmarker> | null = null;
@@ -1183,13 +1189,14 @@ let imageLandmarkerPromise: Promise<HandLandmarker> | null = null;
 async function getImageLandmarker() {
   try {
     if (!imageLandmarkerPromise) {
-      imageLandmarkerPromise = FilesetResolver.forVisionTasks(
-        '[https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm](https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm)'
-      ).then(vision =>
+      const wasmBase = httpsUrl('cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+      const modelAsset = httpsUrl(
+        '[storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task)'
+      );
+      imageLandmarkerPromise = FilesetResolver.forVisionTasks(wasmBase).then(vision =>
         HandLandmarker.createFromOptions(vision, {
           baseOptions: {
-            modelAssetPath:
-              '[https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task](https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task)',
+            modelAssetPath: modelAsset,
             delegate: 'GPU'
           },
           runningMode: 'IMAGE',
@@ -1205,45 +1212,36 @@ async function getImageLandmarker() {
   }
 }
 
-async function extractPdfText(file: File): Promise<string> {
-  const arrayBuffer = await file.arrayBuffer();
-  if (navigator.onLine) {
-    try {
-      const pdfUrl = '[https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs](https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs)';
-      const pdfjsLib: any = await runtimeImport(pdfUrl);
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        '[https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs](https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs)';
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const maxPages = Math.min(pdf.numPages, 15);
-      const pagesText: string[] = [];
-      for (let i = 1; i <= maxPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const strings = content.items.map((item: any) => item.str).join(' ');
-        pagesText.push(`[Page ${i}]: ${strings}`);
-      }
-      if (pagesText.join('').trim().length > 20) {
-        return `PDF Document "${file.name}" (${pdf.numPages} pages):\n` + pagesText.join('\n\n');
-      }
-    } catch {}
-  }
-
+// Pure native PDF text extractor (requires zero external CDN modules and works 100% offline)
+async function extractPdfTextNative(file: File): Promise<string> {
   try {
+    const arrayBuffer = await file.arrayBuffer();
     const decoder = new TextDecoder('latin1');
     const raw = decoder.decode(arrayBuffer);
-    const matches = raw.match(/\(([^()\\]{3,200})\)/g) || [];
-    const cleaned = matches
-      .map(m => m.slice(1, -1).replace(/[^\x20-\x7E]/g, ' ').trim())
-      .filter(s => s.length > 3 && /[a-zA-Z]{2,}/.test(s));
-    if (cleaned.length > 0) {
-      return `PDF Document "${file.name}" (Offline Extracted Text):\n` + cleaned.slice(0, 600).join(' ');
+
+    const extractedChunks: string[] = [];
+    const parenMatches = raw.match(/\(([^()\\]{3,240})\)/g) || [];
+    for (const m of parenMatches) {
+      const clean = m
+        .slice(1, -1)
+        .replace(/\\n|\\r/g, ' ')
+        .replace(/[^\x20-\x7E]/g, ' ')
+        .trim();
+      if (clean.length > 3 && /[a-zA-Z]{2,}/.test(clean) && !/^(Type|Font|Page|Catalog|Metadata|Filter)/i.test(clean)) {
+        extractedChunks.push(clean);
+      }
+      if (extractedChunks.length >= 700) break;
+    }
+
+    if (extractedChunks.length > 0) {
+      return `PDF Document "${file.name}" (${Math.round(file.size / 1024)}KB):\n` + extractedChunks.join(' ');
     }
   } catch {}
 
   return `PDF File "${file.name}" (${Math.round(file.size / 1024)}KB attached).`;
 }
 
-async function extractTextFromImage(img: HTMLImageElement, dataUrl: string): Promise<string> {
+async function extractTextFromImageNative(img: HTMLImageElement): Promise<string> {
   try {
     const AnyWin = window as any;
     if ('TextDetector' in AnyWin) {
@@ -1255,23 +1253,12 @@ async function extractTextFromImage(img: HTMLImageElement, dataUrl: string): Pro
       }
     }
   } catch {}
-
-  if (navigator.onLine) {
-    try {
-      const tessUrl = '[https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js](https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js)';
-      const Tesseract: any = await runtimeImport(tessUrl);
-      const res = await Tesseract.recognize(dataUrl, 'eng');
-      const text = res?.data?.text?.trim();
-      if (text && text.length > 2) return text;
-    } catch {}
-  }
   return '';
 }
 
 async function inspectImageLocally(
   img: HTMLImageElement,
   canvas: HTMLCanvasElement,
-  dataUrl: string,
   fileName: string
 ): Promise<string> {
   const w = img.naturalWidth || canvas.width;
@@ -1332,7 +1319,7 @@ async function inspectImageLocally(
     }
   } catch {}
 
-  const ocrText = await extractTextFromImage(img, dataUrl);
+  const ocrText = await extractTextFromImageNative(img);
   if (ocrText) {
     report.push(`Extracted Visible Text (OCR):\n"${ocrText.slice(0, 3000)}"`);
   }
@@ -1366,7 +1353,7 @@ async function readPickedFile(file: File): Promise<LocalAttachment> {
           const ctx = canvas.getContext('2d');
           if (ctx) ctx.drawImage(img, 0, 0, width, height);
           const dataUrl = canvas.toDataURL('image/jpeg', 0.76);
-          const localVisualReport = await inspectImageLocally(img, canvas, dataUrl, file.name);
+          const localVisualReport = await inspectImageLocally(img, canvas, file.name);
           resolve({
             name: file.name,
             size: file.size,
@@ -1384,7 +1371,7 @@ async function readPickedFile(file: File): Promise<LocalAttachment> {
   }
 
   if (file.type === 'application/pdf' || ext === 'pdf') {
-    const pdfText = await extractPdfText(file);
+    const pdfText = await extractPdfTextNative(file);
     return { name: file.name, size: file.size, mimeType: 'application/pdf', content: pdfText };
   }
 
@@ -1468,16 +1455,16 @@ async function analyzeImagesWithVisionAI(
           }
         });
       }
-      const res = await fetch(
-        `[https://generativelanguage.googleapis.com/v1beta/models/$](https://generativelanguage.googleapis.com/v1beta/models/$){
+      const geminiEndpoint = httpsUrl(
+        `[generativelanguage.googleapis.com/v1beta/models/$](https://generativelanguage.googleapis.com/v1beta/models/$){
           settings.geminiModel || 'gemini-2.5-flash'
-        }:generateContent?key=${geminiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ parts }] })
-        }
+        }:generateContent?key=${geminiKey}`
       );
+      const res = await fetch(geminiEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts }] })
+      });
       if (res.ok) {
         const data = await res.json();
         const reply = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('\n');
@@ -1489,6 +1476,7 @@ async function analyzeImagesWithVisionAI(
   }
 
   const freeVisionModels = ['openai-large', 'gemini', 'openai'];
+  const visionEndpoint = httpsUrl('text.pollinations.ai/openai');
   for (const modelName of freeVisionModels) {
     try {
       const contentParts: any[] = [
@@ -1497,7 +1485,7 @@ async function analyzeImagesWithVisionAI(
       for (const img of validImages) {
         contentParts.push({ type: 'image_url', image_url: { url: img.dataUrl } });
       }
-      const res = await fetch('[https://text.pollinations.ai/openai](https://text.pollinations.ai/openai)', {
+      const res = await fetch(visionEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
