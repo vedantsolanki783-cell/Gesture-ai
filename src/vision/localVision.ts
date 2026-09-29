@@ -4,9 +4,6 @@ import type { CustomGesture, Landmark, VisionResult } from '../types';
 const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const MODEL_PATH = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-// Fine-tuned speed (6-8% faster response):
-// HOLD_TIME_MS: 1100ms (~8% faster than 1200ms)
-// REPEAT_COOLDOWN_MS: 2000ms
 const HOLD_TIME_MS = 1100;
 const REPEAT_COOLDOWN_MS = 2000;
 
@@ -53,6 +50,7 @@ function getFingerStates(lm: Landmark[]) {
   return { thumbOpen, thumbUp, indexOpen, middleOpen, ringOpen, pinkyOpen, indexHalf };
 }
 
+// Checks if ONLY the middle finger is extended on a given hand
 function isOnlyMiddleFinger(lm: Landmark[]): boolean {
   if (!lm || lm.length < 21) return false;
   const { indexOpen, middleOpen, ringOpen, pinkyOpen } = getFingerStates(lm);
@@ -242,6 +240,7 @@ export async function localVision(video: HTMLVideoElement, timestamp: number): P
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
+    // TWO-HAND MIDDLE FINGER TOGGLE: Hold only the middle finger on BOTH hands
     if (hands.length >= 2 && isOnlyMiddleFinger(hands[0]) && isOnlyMiddleFinger(hands[1])) {
       if (now - lastToggleTime > 1500) {
         mouselessMode = !mouselessMode;
