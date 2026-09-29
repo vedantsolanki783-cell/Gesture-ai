@@ -92,7 +92,6 @@ const defaults: AppSettings = {
 const LETTER_COOLDOWN_MS = 1000;
 const SAME_LETTER_COOLDOWN_MS = 1800;
 
-// Embedded Canvas Styles so you do not need to edit styles.css separately
 const CANVAS_EMBEDDED_CSS = `
 .app.has-canvas-open main.app-workspace {
   display: grid;
@@ -810,7 +809,6 @@ export function exportPresentationToHtml(deck: PresentationDeck): string {
 </html>`;
 }
 
-// Exports a Microsoft PowerPoint (.ppt) compatible HTML/XML presentation document
 export function exportPresentationToPpt(deck: PresentationDeck): string {
   const slidesHtml = deck.slides
     .map(
@@ -1178,7 +1176,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 // ============================================================================
 
 let imageLandmarkerPromise: Promise<HandLandmarker> | null = null;
-async function getImageLandmarker(): Promise<HandLandmarker null |> {
+
+async function getImageLandmarker() {
   try {
     if (!imageLandmarkerPromise) {
       imageLandmarkerPromise = FilesetResolver.forVisionTasks(
@@ -1440,7 +1439,6 @@ export function parseArtifactsFromText(text: string): CanvasArtifact[] {
   return artifacts;
 }
 
-// Multimodal Cloud Vision helper for attached images
 async function analyzeImagesWithVisionAI(
   promptText: string,
   images: LocalAttachment[],
@@ -1621,7 +1619,6 @@ export default function App() {
       setTyping(true);
 
       try {
-        // 1. PRESENTATION / PPT INTENT
         const isPresentation =
           currentAttachments.length === 0 &&
           /\b(presentation|ppt|powerpoint|slide\s*deck|slides)\b/i.test(text) &&
@@ -1648,7 +1645,6 @@ export default function App() {
           return;
         }
 
-        // 2. IMAGE GENERATION INTENT
         const isImageRequest =
           currentAttachments.length === 0 &&
           /^(generate|create|draw|make|render)\s+(an?\s+)?(image|picture|photo|art|wallpaper|logo|diagram)\b/i.test(text);
@@ -1664,7 +1660,6 @@ export default function App() {
           return;
         }
 
-        // 3. ATTACHED IMAGE MULTIMODAL VISION
         if (imageAttachments.length > 0) {
           const visionResult = await analyzeImagesWithVisionAI(text, imageAttachments, settings);
           if (visionResult) {
@@ -1679,7 +1674,6 @@ export default function App() {
           }
         }
 
-        // 4. GENERAL AI / HTML APP / FILE ANALYSIS
         const telemetryBlock =
           currentAttachments.length > 0
             ? '\n\n[DEEP FILE & VISION SENSOR DATA]:\n' +
@@ -1710,7 +1704,6 @@ export default function App() {
         ]);
         speak(finalReply);
       } catch {
-        // Offline Fallback: Still compiles HTML apps or returns local vision reports
         if (/\b(html|web\s*app|calculator|todo)\b/i.test(text)) {
           const appArt = synthesizeOfflineHtmlApp(text);
           openArtifactInCanvas(appArt);
