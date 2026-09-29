@@ -1,9 +1,19 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Bot, ChevronLeft, ChevronRight, Code, Copy, Download, ExternalLink,
-  Eye, FileText, Maximize2, Mic, MicOff, Minimize2, Moon, Palette,
-  Paperclip, Play, Presentation, RefreshCw, Send, Settings, Share2,
-  Sparkles, Sun, Trash2, User, WifiOff, X
+  Bot,
+  Copy,
+  Mic,
+  MicOff,
+  Moon,
+  Paperclip,
+  Send,
+  Settings,
+  Sparkles,
+  Sun,
+  Trash2,
+  User,
+  WifiOff,
+  X
 } from 'lucide-react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { generateLocalOrCloud } from './services/aiRouter';
@@ -14,29 +24,28 @@ import type { AppSettings, Message, VisionResult } from './types';
 import './styles.css';
 
 // ============================================================================
-// TYPES & CORE INTERFACES
+// TYPES & INTERFACES
 // ============================================================================
 
-export type ArtifactType = 'html' | 'presentation' | 'image' | 'code' | 'document';
+export type ArtifactType = 'html' | 'presentation' | 'image' | 'code';
 
 export interface SlideData {
   id: string;
   title: string;
   subtitle?: string;
-  layout: 'title' | 'bullets' | 'two-column' | 'quote' | 'stats' | 'code';
+  layout: 'title' | 'bullets' | 'two-column' | 'quote' | 'stats';
   bullets?: string[];
   leftColumn?: string[];
   rightColumn?: string[];
   quote?: { text: string; author: string };
   stats?: { value: string; label: string }[];
-  codeSnippet?: { language: string; code: string };
   notes?: string;
 }
 
 export interface PresentationDeck {
   title: string;
   author: string;
-  theme: 'cyber' | 'minimal' | 'executive' | 'sunset' | 'emerald';
+  theme: 'cyber' | 'minimal' | 'executive';
   slides: SlideData[];
 }
 
@@ -73,16 +82,252 @@ const defaults: AppSettings = {
   geminiModel: 'gemini-2.5-flash',
   webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
   systemInstruction:
-    'You are NOVA (Jarvis + Ultron Core), an advanced multimodal AI assistant with an interactive Canvas workspace. ' +
-    'You can analyze files/images, run live HTML web apps, generate multi-slide presentation decks, write code, and synthesize images. ' +
-    'When generating an interactive HTML web app, wrap it in a single ```html code block with <!DOCTYPE html>. ' +
-    'When asked for slides/presentation, structure it as structured slides or wrap the presentation data in a code block. ' +
-    'When asked to draw or generate an image, output [[GENERATE_IMAGE: descriptive prompt]].',
+    'You are NOVA (Jarvis + Ultron Core), an advanced multimodal AI assistant and generative Canvas engine. ' +
+    'You can analyze images, PDFs, CSVs, and code; generate interactive HTML web apps; build multi-slide presentations; and synthesize images. ' +
+    'When asked to build an HTML app, website, game, or tool, return a complete single-file HTML5 document inside a ```html code block with inline CSS and JS. ' +
+    'When asked to draw or generate an image, include [[GENERATE_IMAGE: detailed visual prompt]].',
   customGestures: []
 };
 
 const LETTER_COOLDOWN_MS = 1000;
 const SAME_LETTER_COOLDOWN_MS = 1800;
+
+// Embedded Canvas Styles so you do not need to edit styles.css separately
+const CANVAS_EMBEDDED_CSS = `
+.app.has-canvas-open main.app-workspace {
+  display: grid;
+  grid-template-columns: 300px 1fr 520px;
+  gap: 14px;
+}
+@media (max-width: 1280px) {
+  .app.has-canvas-open main.app-workspace {
+    grid-template-columns: 260px 1fr 440px;
+  }
+}
+@media (max-width: 980px) {
+  .app.has-canvas-open main.app-workspace {
+    grid-template-columns: 1fr;
+  }
+  .canvas-drawer {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 9999 !important;
+    border-radius: 0 !important;
+  }
+}
+.canvas-drawer {
+  background: #090d16;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 86px);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+.canvas-drawer.maximized {
+  position: fixed;
+  inset: 0;
+  height: 100vh;
+  border-radius: 0;
+  z-index: 99999;
+}
+.canvas-header {
+  padding: 12px 16px;
+  background: #0f172a;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.canvas-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #38bdf8;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.canvas-title-group h3 {
+  font-size: 14px;
+  color: #f8fafc;
+  margin: 2px 0 0 0;
+  max-width: 210px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.canvas-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.canvas-btn {
+  background: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.canvas-btn.highlight {
+  background: #0284c7;
+  color: #fff;
+  border-color: #38bdf8;
+}
+.canvas-btn:hover {
+  background: #38bdf8;
+  color: #020617;
+}
+.canvas-tabs {
+  display: flex;
+  background: #0b1120;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.c-tab {
+  flex: 1;
+  padding: 9px;
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.c-tab.active {
+  color: #38bdf8;
+  border-bottom-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.06);
+}
+.canvas-body {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+  background: #020617;
+}
+.slide-deck-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.slide-deck-controls {
+  padding: 10px 14px;
+  background: #090d16;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.slide-theme-picker {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+.slide-theme-picker button {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: #cbd5e1;
+  font-size: 11px;
+  cursor: pointer;
+}
+.slide-theme-picker button.active {
+  background: #38bdf8;
+  color: #020617;
+  font-weight: 700;
+}
+.slide-pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+.slide-pagination button {
+  background: #1e293b;
+  border: none;
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.slide-viewport {
+  flex: 1;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.slide-content-card {
+  width: 100%;
+  min-height: 270px;
+  border-radius: 16px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.theme-cyber .slide-content-card {
+  background: linear-gradient(135deg, #090e1c 0%, #171b38 100%);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6);
+  color: #f8fafc;
+}
+.theme-executive .slide-content-card {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #f8fafc;
+}
+.theme-minimal .slide-content-card {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  color: #0f172a;
+}
+.theme-minimal h1, .theme-minimal h2 { color: #0f172a !important; }
+.theme-minimal .slide-bullet-list, .theme-minimal .slide-sub { color: #334155 !important; }
+.slide-content-card h1 { color: #38bdf8; font-size: 28px; margin-bottom: 10px; }
+.slide-content-card h2 { color: #f8fafc; font-size: 22px; border-bottom: 2px solid rgba(56, 189, 248, 0.3); padding-bottom: 8px; margin-bottom: 14px; }
+.slide-sub { font-size: 15px; color: #94a3b8; }
+.slide-meta-badge { display: inline-block; margin-top: 16px; padding: 4px 12px; background: rgba(56, 189, 248, 0.15); border-radius: 999px; color: #38bdf8; font-size: 11px; font-weight: bold; }
+.slide-bullet-list { list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: #cbd5e1; padding: 0; }
+.slide-bullet-list li::before { content: "✦ "; color: #38bdf8; }
+.slide-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.slide-col { background: rgba(15, 23, 42, 0.55); padding: 12px; border-radius: 10px; }
+.slide-col h4 { color: #a855f7; margin-bottom: 6px; font-size: 13px; }
+.slide-col ul { list-style: none; padding: 0; font-size: 13px; display: flex; flex-direction: column; gap: 5px; color: #cbd5e1; }
+.slide-stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.slide-stat-item { background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.22); padding: 12px; border-radius: 10px; text-align: center; }
+.stat-big { display: block; font-size: 26px; font-weight: 800; color: #38bdf8; }
+.stat-label { font-size: 11px; color: #94a3b8; }
+.slide-quote-view blockquote { font-size: 17px; font-style: italic; color: #e2e8f0; border-left: 4px solid #a855f7; padding-left: 14px; margin: 0; }
+.slide-quote-view cite { display: block; margin-top: 10px; color: #38bdf8; font-weight: bold; font-size: 13px; }
+.slide-notes-footer { padding: 9px 14px; background: #080d1a; font-size: 11px; color: #94a3b8; border-top: 1px solid rgba(255, 255, 255, 0.05); }
+.html-runner-container { width: 100%; height: 100%; }
+.html-sandboxed-iframe { width: 100%; height: 100%; border: none; background: #ffffff; }
+.image-studio-container { padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; }
+.image-studio-display { max-width: 100%; max-height: 65vh; border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6); }
+.image-studio-caption { margin-top: 12px; color: #94a3b8; font-size: 12px; text-align: center; }
+.code-inspector-container { padding: 14px; height: 100%; overflow: auto; background: #070b14; }
+.code-inspector-pre { font-family: monospace; font-size: 12px; color: #38bdf8; line-height: 1.5; white-space: pre-wrap; margin: 0; }
+`;
 
 function isVisionRefusal(text: string): boolean {
   if (!text) return true;
@@ -115,13 +360,20 @@ export function renderProceduralCanvasImage(
     ctx.strokeStyle = 'rgba(56, 189, 248, 0.12)';
     ctx.lineWidth = 1;
     for (let x = 0; x < 1200; x += 40) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 750); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, 750);
+      ctx.stroke();
     }
     for (let y = 0; y < 750; y += 40) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(1200, y); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(1200, y);
+      ctx.stroke();
     }
 
-    const cx = 600, cy = 340;
+    const cx = 600;
+    const cy = 340;
     for (let r = 50; r <= 220; r += 32) {
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -141,7 +393,7 @@ export function renderProceduralCanvasImage(
     ctx.fill();
 
     ctx.fillStyle = '#f8fafc';
-    ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, sans-serif';
+    ctx.font = 'bold 28px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('NOVA JARVIS OFFLINE RENDER', cx, 630);
     ctx.fillStyle = '#38bdf8';
@@ -183,7 +435,7 @@ export function renderProceduralCanvasImage(
   } else {
     const grad = ctx.createLinearGradient(0, 0, 1200, 750);
     grad.addColorStop(0, '#0f172a');
-    grad.addColorStop(1, '#1e293b');
+    grad.addColorStop(1, '#1e1b4b');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 1200, 750);
     ctx.fillStyle = '#38bdf8';
@@ -192,14 +444,17 @@ export function renderProceduralCanvasImage(
     ctx.fillText('NOVA GENERATIVE CANVAS', 600, 340);
     ctx.fillStyle = '#94a3b8';
     ctx.font = '20px monospace';
-    ctx.fillText(prompt, 600, 390);
+    ctx.fillText(prompt.slice(0, 75), 600, 390);
   }
 
   return canvas.toDataURL('image/png');
 }
 
 export async function generateVisualImageArtifact(prompt: string): Promise<CanvasArtifact> {
-  const clean = prompt.replace(/^(generate|create|draw|make|render)\s+(an?\s+)?(image|picture|photo|art|diagram)\s+(of\s+)?/i, '').trim() || prompt;
+  const clean =
+    prompt
+      .replace(/^(generate|create|draw|make|render)\s+(an?\s+)?(image|picture|photo|art|wallpaper|logo|diagram)\s+(of\s+)?/i, '')
+      .trim() || prompt;
   const safeSlug = clean.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 28) || 'artifact-image';
 
   if (navigator.onLine) {
@@ -244,11 +499,116 @@ export async function generateVisualImageArtifact(prompt: string): Promise<Canva
 }
 
 // ============================================================================
-// 2. PRESENTATION DECK GENERATOR & PPTX / HTML EXPORTERS
+// 2. OFFLINE & ONLINE HTML WEB APP SYNTHESIZER
+// ============================================================================
+
+export function synthesizeOfflineHtmlApp(prompt: string): CanvasArtifact {
+  const lower = prompt.toLowerCase();
+  let title = 'Interactive Web Application';
+  let html = '';
+
+  if (lower.includes('calculator')) {
+    title = 'Jarvis Scientific Calculator';
+    html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"><title>${title}</title>
+<style>
+  body { background: #090d16; color: #f8fafc; font-family: system-ui, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+  .calc { background: #111827; padding: 24px; border-radius: 20px; border: 1px solid rgba(56,189,248,0.3); width: 320px; box-shadow: 0 20px 50px rgba(0,0,0,0.6); }
+  #disp { width: 100%; height: 64px; background: #020617; border: 1px solid #1e293b; border-radius: 12px; color: #38bdf8; font-size: 28px; text-align: right; padding: 12px; box-sizing: border-box; margin-bottom: 16px; font-family: monospace; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  button { padding: 16px; font-size: 18px; font-weight: bold; border: none; border-radius: 12px; background: #1e293b; color: #f8fafc; cursor: pointer; transition: 0.15s; }
+  button:hover { background: #38bdf8; color: #020617; }
+  .op { background: #0284c7; }
+  .eq { background: #10b981; grid-column: span 2; }
+</style>
+</head>
+<body>
+  <div class="calc">
+    <input id="disp" readonly value="0" />
+    <div class="grid">
+      <button onclick="clr()" style="background:#ef4444">C</button>
+      <button onclick="ins('(')">(</button>
+      <button onclick="ins(')')">)</button>
+      <button class="op" onclick="ins('/')">÷</button>
+      <button onclick="ins('7')">7</button><button onclick="ins('8')">8</button><button onclick="ins('9')">9</button><button class="op" onclick="ins('*')">×</button>
+      <button onclick="ins('4')">4</button><button onclick="ins('5')">5</button><button onclick="ins('6')">6</button><button class="op" onclick="ins('-')">−</button>
+      <button onclick="ins('1')">1</button><button onclick="ins('2')">2</button><button onclick="ins('3')">3</button><button class="op" onclick="ins('+')">+</button>
+      <button onclick="ins('0')">0</button><button onclick="ins('.')">.</button><button class="eq" onclick="solve()">=</button>
+    </div>
+  </div>
+  <script>
+    const d = document.getElementById('disp');
+    function ins(v) { d.value = d.value === '0' ? v : d.value + v; }
+    function clr() { d.value = '0'; }
+    function solve() { try { d.value = String(Function('return ' + d.value)()); } catch { d.value = 'Error'; } }
+  </script>
+</body>
+</html>`;
+  } else {
+    title = prompt.slice(0, 36) || 'NOVA Interactive Web App';
+    html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"><title>${title}</title>
+<style>
+  body { background: #090d16; color: #f8fafc; font-family: system-ui, sans-serif; padding: 32px; margin: 0; }
+  .card { max-width: 680px; margin: 0 auto; background: #111827; border: 1px solid rgba(56,189,248,0.3); border-radius: 16px; padding: 28px; box-shadow: 0 15px 40px rgba(0,0,0,0.5); }
+  h1 { color: #38bdf8; margin-top: 0; }
+  .row { display: flex; gap: 10px; margin-bottom: 18px; }
+  input { flex: 1; padding: 12px; border-radius: 10px; border: 1px solid #334155; background: #020617; color: #fff; }
+  button { padding: 12px 20px; border-radius: 10px; border: none; background: #0284c7; color: #fff; font-weight: bold; cursor: pointer; }
+  ul { list-style: none; padding: 0; }
+  li { background: #1e293b; padding: 12px 16px; border-radius: 10px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>⚡ ${title}</h1>
+    <p style="color:#94a3b8">Interactive Workspace generated by NOVA Canvas.</p>
+    <div class="row">
+      <input id="inp" placeholder="Add new item or command..." onkeydown="if(event.key==='Enter')add()" />
+      <button onclick="add()">Add Item</button>
+    </div>
+    <ul id="list">
+      <li><span>Initialize Jarvis Core Protocol</span><button onclick="this.parentElement.remove()" style="background:#ef4444;padding:6px 10px">Done</button></li>
+    </ul>
+  </div>
+  <script>
+    function add() {
+      const inp = document.getElementById('inp');
+      if (!inp.value.trim()) return;
+      const li = document.createElement('li');
+      li.innerHTML = '<span>' + inp.value + '</span><button onclick="this.parentElement.remove()" style="background:#ef4444;padding:6px 10px">Done</button>';
+      document.getElementById('list').appendChild(li);
+      inp.value = '';
+    }
+  </script>
+</body>
+</html>`;
+  }
+
+  return {
+    id: crypto.randomUUID(),
+    title,
+    type: 'html',
+    filename: `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.html`,
+    mimeType: 'text/html',
+    content: html,
+    timestamp: Date.now()
+  };
+}
+
+// ============================================================================
+// 3. PRESENTATION DECK GENERATOR & PPT / HTML EXPORTERS
 // ============================================================================
 
 export function synthesizePresentationDeck(topic: string): PresentationDeck {
-  const cleanTopic = topic.replace(/^(create|make|build|generate)\s+(a\s+)?(presentation|ppt|slides?|deck)\s+(on|about)?/i, '').trim() || topic;
+  const cleanTopic =
+    topic
+      .replace(/^(create|make|build|generate|design)\s+(a\s+)?(presentation|ppt|powerpoint|slides?|deck)\s+(on|about|for)?/i, '')
+      .trim() || topic;
   const capitalized = cleanTopic.charAt(0).toUpperCase() + cleanTopic.slice(1);
 
   return {
@@ -261,77 +621,76 @@ export function synthesizePresentationDeck(topic: string): PresentationDeck {
         title: capitalized,
         subtitle: 'Executive Architecture, Technical Strategy & Future Horizons',
         layout: 'title',
-        notes: 'Introductory slide outlining strategic objectives and vision.'
+        notes: 'Opening title slide introducing the core topic and strategic vision.'
       },
       {
         id: '2',
-        title: 'Executive Overview',
+        title: 'Executive Overview & Core Pillars',
         layout: 'bullets',
         bullets: [
-          `Rapid advancement in ${cleanTopic} driving paradigm shifts in intelligent automation.`,
-          'Decentralized on-device processing paired with cloud reasoning architectures.',
-          'Autonomous agent loops eliminating manual system bottlenecks.',
-          'Robust compliance, security sandboxing, and zero-latency execution.'
+          `Strategic transformation and key breakthroughs in ${cleanTopic}.`,
+          'Hybrid architecture combining local on-device intelligence with cloud scalability.',
+          'Real-time automation pipelines reducing manual operational overhead.',
+          'High-reliability execution with full offline resilience.'
         ],
-        notes: 'Key foundational takeaways for stakeholders.'
+        notes: 'Highlight the four foundational pillars driving this initiative.'
       },
       {
         id: '3',
-        title: 'Core Architecture Breakdown',
+        title: 'System Architecture Comparison',
         layout: 'two-column',
         leftColumn: [
-          'On-Device Perception Layer',
-          'Local Neural Vision (MediaPipe)',
-          'Real-time landmark tracking',
-          'Sub-second deterministic latency'
+          'Core Capabilities',
+          'Real-time data & sensor processing',
+          'Low-latency local execution',
+          'Modular extensible design'
         ],
         rightColumn: [
-          'Autonomous Agent Engine',
-          'Tool-calling execution pipeline',
-          'Interactive Canvas runtime',
-          'Cross-platform file packaging'
+          'Strategic Outcomes',
+          '10x faster workflow completion',
+          'Zero-downtime offline continuity',
+          'Seamless cross-device deployment'
         ],
-        notes: 'Comparison of edge computing components vs agent execution modules.'
+        notes: 'Compare technical capabilities on the left with business outcomes on the right.'
       },
       {
         id: '4',
-        title: 'Key Impact Metrics',
+        title: 'Key Performance Benchmarks',
         layout: 'stats',
         stats: [
-          { value: '100%', label: 'Offline Resiliency' },
-          { value: '<50ms', label: 'Gesture Frame Latency' },
-          { value: '26', label: 'ASL Alphabet Support' },
-          { value: '0-Config', label: 'Portable Cloud Sync' }
+          { value: '99.9%', label: 'System Reliability' },
+          { value: '<50ms', label: 'Response Latency' },
+          { value: '24/7', label: 'Autonomous Operation' },
+          { value: '100%', label: 'Offline Capable' }
         ],
-        notes: 'Core quantitative benchmarks achieved by this system.'
+        notes: 'Core quantitative metrics demonstrating performance.'
       },
       {
         id: '5',
-        title: 'Guiding Principle',
+        title: 'Guiding Vision',
         layout: 'quote',
         quote: {
-          text: `The true measure of intelligence is not knowledge alone, but autonomous execution and effortless human augmentation.`,
-          author: 'Jarvis Core Directives'
+          text: `The true power of ${cleanTopic} lies in combining human creativity with autonomous, intelligent execution.`,
+          author: 'NOVA Executive Briefing'
         },
-        notes: 'Visionary quotation encapsulating the philosophy of Jarvis + Ultron.'
+        notes: 'Key takeaway quote summarizing the philosophy.'
       },
       {
         id: '6',
-        title: 'Roadmap & Implementation Next Steps',
+        title: 'Implementation Roadmap & Next Steps',
         layout: 'bullets',
         bullets: [
-          'Phase 1: Localized neural landmark cache validation and testing.',
-          'Phase 2: Android background foreground service integration via GitHub Actions.',
-          'Phase 3: System-level Accessibility Service automation across native apps.',
-          'Phase 4: Full offline LLM quantization cache in local device storage.'
+          'Phase 1: Core foundation deployment and baseline verification.',
+          'Phase 2: Autonomous agent workflow integration and testing.',
+          'Phase 3: Mobile APK packaging and background service activation.',
+          'Phase 4: Full-scale production rollout and continuous optimization.'
         ],
-        notes: 'Closing action items and forward roadmap.'
+        notes: 'Actionable 4-phase implementation plan.'
       }
     ]
   };
 }
 
-// Compiles a presentation deck into a self-contained, interactive HTML slide deck file
 export function exportPresentationToHtml(deck: PresentationDeck): string {
   const slidesJson = JSON.stringify(deck);
   return `<!DOCTYPE html>
@@ -343,7 +702,7 @@ export function exportPresentationToHtml(deck: PresentationDeck): string {
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       background: #020617;
       color: #f8fafc;
       overflow: hidden;
@@ -356,45 +715,42 @@ export function exportPresentationToHtml(deck: PresentationDeck): string {
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 40px;
-      position: relative;
+      padding: 32px;
     }
     .slide-card {
       width: 100%;
-      max-width: 1100px;
+      max-width: 1050px;
       aspect-ratio: 16/9;
       background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
-      border: 1px solid rgba(56, 189, 248, 0.3);
+      border: 1px solid rgba(56, 189, 248, 0.35);
       border-radius: 20px;
       box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
-      padding: 60px;
+      padding: 54px;
       display: flex;
       flex-direction: column;
       justify-content: center;
-      position: relative;
     }
-    h1 { font-size: 48px; font-weight: 800; color: #38bdf8; margin-bottom: 16px; line-height: 1.15; }
-    h2 { font-size: 38px; font-weight: 700; color: #f8fafc; margin-bottom: 30px; border-bottom: 2px solid rgba(56, 189, 248, 0.3); padding-bottom: 12px; }
-    p.subtitle { font-size: 22px; color: #94a3b8; line-height: 1.5; }
-    ul { list-style: none; display: flex; flex-direction: column; gap: 16px; font-size: 22px; color: #cbd5e1; }
+    h1 { font-size: 44px; font-weight: 800; color: #38bdf8; margin-bottom: 16px; }
+    h2 { font-size: 34px; font-weight: 700; color: #f8fafc; margin-bottom: 26px; border-bottom: 2px solid rgba(56, 189, 248, 0.3); padding-bottom: 10px; }
+    p.subtitle { font-size: 20px; color: #94a3b8; }
+    ul { list-style: none; display: flex; flex-direction: column; gap: 14px; font-size: 20px; color: #cbd5e1; }
     ul li::before { content: "✦ "; color: #38bdf8; font-weight: bold; }
-    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
-    .col-box { background: rgba(15, 23, 42, 0.6); padding: 24px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.08); }
-    .col-box h3 { font-size: 22px; color: #a855f7; margin-bottom: 12px; }
-    .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
-    .stat-card { background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 14px; padding: 24px; text-align: center; }
-    .stat-val { font-size: 46px; font-weight: 900; color: #38bdf8; margin-bottom: 6px; }
-    .stat-lbl { font-size: 16px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
-    .quote-box { border-left: 5px solid #a855f7; padding-left: 24px; font-style: italic; font-size: 26px; line-height: 1.6; color: #e2e8f0; }
-    .quote-author { font-size: 18px; color: #38bdf8; font-style: normal; margin-top: 14px; font-weight: bold; }
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+    .col-box { background: rgba(15, 23, 42, 0.6); padding: 20px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.08); }
+    .stats-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+    .stat-card { background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 14px; padding: 20px; text-align: center; }
+    .stat-val { font-size: 40px; font-weight: 900; color: #38bdf8; }
+    .stat-lbl { font-size: 14px; color: #94a3b8; text-transform: uppercase; }
+    .quote-box { border-left: 5px solid #a855f7; padding-left: 22px; font-style: italic; font-size: 24px; color: #e2e8f0; }
+    .quote-author { font-size: 17px; color: #38bdf8; font-style: normal; margin-top: 12px; font-weight: bold; }
     #toolbar {
-      height: 60px;
+      height: 56px;
       background: #090d16;
       border-top: 1px solid rgba(255, 255, 255, 0.1);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 30px;
+      padding: 0 24px;
       font-size: 14px;
       color: #94a3b8;
     }
@@ -402,7 +758,7 @@ export function exportPresentationToHtml(deck: PresentationDeck): string {
       background: #1e293b;
       color: #f8fafc;
       border: 1px solid rgba(255, 255, 255, 0.15);
-      padding: 8px 16px;
+      padding: 7px 14px;
       border-radius: 8px;
       cursor: pointer;
       font-weight: 600;
@@ -411,13 +767,11 @@ export function exportPresentationToHtml(deck: PresentationDeck): string {
   </style>
 </head>
 <body>
-  <div id="stage">
-    <div class="slide-card" id="card"></div>
-  </div>
+  <div id="stage"><div class="slide-card" id="card"></div></div>
   <div id="toolbar">
     <div><strong>${deck.title}</strong> · <span id="counter">Slide 1 of ${deck.slides.length}</span></div>
     <div style="display: flex; gap: 10px;">
-      <button onclick="prev()">◄ Previous</button>
+      <button onclick="prev()">◄ Prev</button>
       <button onclick="next()">Next ►</button>
       <button onclick="document.documentElement.requestFullscreen()">Fullscreen</button>
     </div>
@@ -432,16 +786,16 @@ export function exportPresentationToHtml(deck: PresentationDeck): string {
       if (s.layout === 'title') {
         card.innerHTML = '<h1>' + s.title + '</h1><p class="subtitle">' + (s.subtitle || '') + '</p>';
       } else if (s.layout === 'bullets') {
-        card.innerHTML = '<h2>' + s.title + '</h2><ul>' + s.bullets.map(b => '<li>' + b + '</li>').join('') + '</ul>';
+        card.innerHTML = '<h2>' + s.title + '</h2><ul>' + (s.bullets || []).map(b => '<li>' + b + '</li>').join('') + '</ul>';
       } else if (s.layout === 'two-column') {
-        card.innerHTML = '<h2>' + s.title + '</h2><div class="two-col"><div class="col-box"><h3>Key Vectors</h3><ul>' +
-          s.leftColumn.map(b => '<li>' + b + '</li>').join('') + '</ul></div><div class="col-box"><h3>Target Outcomes</h3><ul>' +
-          s.rightColumn.map(b => '<li>' + b + '</li>').join('') + '</ul></div></div>';
+        card.innerHTML = '<h2>' + s.title + '</h2><div class="two-col"><div class="col-box"><ul>' +
+          (s.leftColumn || []).map(b => '<li>' + b + '</li>').join('') + '</ul></div><div class="col-box"><ul>' +
+          (s.rightColumn || []).map(b => '<li>' + b + '</li>').join('') + '</ul></div></div>';
       } else if (s.layout === 'stats') {
         card.innerHTML = '<h2>' + s.title + '</h2><div class="stats-grid">' +
-          s.stats.map(st => '<div class="stat-card"><div class="stat-val">' + st.value + '</div><div class="stat-lbl">' + st.label + '</div></div>').join('') + '</div>';
+          (s.stats || []).map(st => '<div class="stat-card"><div class="stat-val">' + st.value + '</div><div class="stat-lbl">' + st.label + '</div></div>').join('') + '</div>';
       } else if (s.layout === 'quote') {
-        card.innerHTML = '<h2>' + s.title + '</h2><div class="quote-box">"' + s.quote.text + '"<div class="quote-author">— ' + s.quote.author + '</div></div>';
+        card.innerHTML = '<h2>' + s.title + '</h2><div class="quote-box">"' + (s.quote ? s.quote.text : '') + '"<div class="quote-author">— ' + (s.quote ? s.quote.author : '') + '</div></div>';
       }
     }
     function prev() { if (current > 0) { current--; render(); } }
@@ -456,37 +810,32 @@ export function exportPresentationToHtml(deck: PresentationDeck): string {
 </html>`;
 }
 
-// Exports the presentation deck into standard OpenXML PowerPoint compatible presentation package
-export function exportPresentationToPptxXml(deck: PresentationDeck): string {
-  const slidesXml = deck.slides
-    .map((s, idx) => {
-      const bullets = (s.bullets || []).map(b => `    • ${b}`).join('\n');
-      return `
-=========================================
-SLIDE ${idx + 1}: ${s.title.toUpperCase()}
-=========================================
-${s.subtitle ? s.subtitle + '\n' : ''}
-${bullets}
-${s.quote ? `"${s.quote.text}" - ${s.quote.author}\n` : ''}
-${s.stats ? s.stats.map(st => `[${st.value}] : ${st.label}`).join('\n') : ''}
-[Speaker Notes]: ${s.notes || 'None'}
-`;
-    })
+// Exports a Microsoft PowerPoint (.ppt) compatible HTML/XML presentation document
+export function exportPresentationToPpt(deck: PresentationDeck): string {
+  const slidesHtml = deck.slides
+    .map(
+      (s, idx) => `
+    <div style="page-break-after: always; padding: 40px; font-family: Calibri, Arial, sans-serif; background: #0f172a; color: #ffffff; margin-bottom: 24px;">
+      <h1 style="color: #38bdf8; font-size: 28pt;">Slide ${idx + 1}: ${s.title}</h1>
+      ${s.subtitle ? `<h2 style="color: #94a3b8; font-size: 18pt;">${s.subtitle}</h2>` : ''}
+      ${s.bullets ? `<ul style="font-size: 16pt; line-height: 1.6;">${s.bullets.map(b => `<li>${b}</li>`).join('')}</ul>` : ''}
+      ${s.leftColumn ? `<p style="font-size: 15pt;"><b>Key Vectors:</b> ${s.leftColumn.join(' | ')}</p>` : ''}
+      ${s.rightColumn ? `<p style="font-size: 15pt;"><b>Outcomes:</b> ${s.rightColumn.join(' | ')}</p>` : ''}
+      ${s.stats ? `<p style="font-size: 16pt;">${s.stats.map(st => `<b>${st.value}</b> (${st.label})`).join(' • ')}</p>` : ''}
+      ${s.quote ? `<blockquote style="font-size: 18pt; font-style: italic;">"${s.quote.text}" — ${s.quote.author}</blockquote>` : ''}
+      ${s.notes ? `<p style="color: #64748b; font-size: 11pt; margin-top: 20px;">Speaker Notes: ${s.notes}</p>` : ''}
+    </div>`
+    )
     .join('\n');
 
-  return `NOVA JARVIS POWERPOINT EXPORT
-Presentation: ${deck.title}
-Author: ${deck.author}
-Theme: ${deck.theme}
-Total Slides: ${deck.slides.length}
-=========================================
-${slidesXml}
-=========================================
-Note: Open this structured presentation in Microsoft PowerPoint, Google Slides, or Keynote.`;
+  return `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:p="urn:schemas-microsoft-com:office:powerpoint" xmlns="[http://www.w3.org/TR/REC-html40](http://www.w3.org/TR/REC-html40)">
+<head><meta charset="utf-8"><title>${deck.title}</title></head>
+<body>${slidesHtml}</body>
+</html>`;
 }
 
 // ============================================================================
-// 3. CANVAS WORKSPACE UI COMPONENTS (SLIDES, HTML RUNNER, CODE, IMAGE)
+// 4. CANVAS WORKSPACE COMPONENT
 // ============================================================================
 
 interface CanvasWorkspaceProps {
@@ -559,41 +908,42 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     downloadFile(artifact.filename, artifact.content, artifact.mimeType);
   };
 
-  const deck = artifact.deck || (artifact.type === 'presentation' ? synthesizePresentationDeck(artifact.title) : null);
-  const currentSlide = deck ? deck.slides[slideIndex] : null;
+  const deck =
+    artifact.deck || (artifact.type === 'presentation' ? synthesizePresentationDeck(artifact.title) : null);
+  const currentSlide = deck ? deck.slides[slideIndex] || deck.slides[0] : null;
+  const safeSlug = artifact.title.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'presentation';
 
   return (
     <aside className={`canvas-drawer ${isMaximized ? 'maximized' : ''}`}>
-      {/* Canvas Top Bar */}
       <div className="canvas-header">
         <div className="canvas-title-group">
           <div className="canvas-badge">
-            {artifact.type === 'presentation' && <Presentation size="{15}"/>}
-            {artifact.type === 'html' && <Play size="{15}"/>}
-            {artifact.type === 'image' && <Sparkles size="{15}"/>}
-            {artifact.type === 'code' && <Code size="{15}"/>}
-            <span>CANVAS ARTIFACT</span>
+            <Sparkles size="{13}"/>
+            <span>CANVAS STUDIO · {artifact.type.toUpperCase()}</span>
           </div>
           <h3>{artifact.title}</h3>
         </div>
 
-        {/* Action Controls */}
         <div className="canvas-actions">
-          {artifact.type === 'presentation' && (
+          {artifact.type === 'presentation' && deck && (
             <>
               <button
                 className="canvas-btn highlight"
-                onClick={() => downloadFile(`${artifact.title}.html`, exportPresentationToHtml(deck!), 'text/html')}
-                title="Download HTML Slide Deck"
+                onClick={() =>
+                  downloadFile(`${safeSlug}-slides.html`, exportPresentationToHtml(deck), 'text/html')
+                }
+                title="Download Interactive HTML Slide Deck"
               >
-                <Download size="{14}"/> <span>HTML Slides</span>
+                ⬇ HTML Deck
               </button>
               <button
                 className="canvas-btn"
-                onClick={() => downloadFile(`${artifact.title}.txt`, exportPresentationToPptxXml(deck!), 'text/plain')}
-                title="Download PowerPoint Presentation"
+                onClick={() =>
+                  downloadFile(`${safeSlug}.ppt`, exportPresentationToPpt(deck), 'application/vnd.ms-powerpoint')
+                }
+                title="Download PowerPoint (.ppt) File"
               >
-                <Presentation size="{14}"/> <span>PPTX Export</span>
+                ⬇ .PPT File
               </button>
             </>
           )}
@@ -603,7 +953,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               className="canvas-btn highlight"
               onClick={() => downloadFile(artifact.filename, artifact.content, 'text/html')}
             >
-              <Download size="{14}"/> <span>Save .html</span>
+              ⬇ Save .HTML
             </button>
           )}
 
@@ -612,52 +962,70 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               className="canvas-btn highlight"
               onClick={() => downloadFile(artifact.filename, artifact.content, artifact.mimeType)}
             >
-              <Download size="{14}"/> <span>Save Image</span>
+              ⬇ Save Image
             </button>
           )}
 
-          <button className="canvas-btn" onClick={shareOffline} title="Share Offline">
-            <Share2 size="{14}"/>
+          {artifact.type === 'code' && (
+            <button
+              className="canvas-btn highlight"
+              onClick={() => downloadFile(artifact.filename, artifact.content, artifact.mimeType)}
+            >
+              ⬇ Save {artifact.filename}
+            </button>
+          )}
+
+          <button className="canvas-btn" onClick={shareOffline} title="Share File Offline">
+            Share
           </button>
-          <button className="canvas-btn" onClick={onToggleMaximize} title="Toggle Expand">
-            {isMaximized ? <Minimize2 size="{14}"/> : <Maximize2 size="{14}"/>}
+          <button className="canvas-btn" onClick={onToggleMaximize} title="Expand / Restore Canvas">
+            {isMaximized ? 'Restore' : 'Expand'}
           </button>
-          <button className="canvas-btn close" onClick={onClose} title="Close Canvas">
-            <X size="{16}"/>
+          <button className="canvas-btn" onClick={onClose} title="Close Canvas">
+            <X size="{15}"/>
           </button>
         </div>
       </div>
 
-      {/* Tabs Selector */}
       <div className="canvas-tabs">
         {artifact.type === 'presentation' && (
-          <button className={`c-tab ${activeTab === 'slides' ? 'active' : ''}`} onClick={() => setActiveTab('slides')}>
-            <Presentation size="{14}"/> Slide Deck Viewer
+          <button
+            className={`c-tab ${activeTab === 'slides' ? 'active' : ''}`}
+            onClick={() => setActiveTab('slides')}
+          >
+            📊 Slide Deck Player
           </button>
         )}
-        {artifact.type === 'html' && (
-          <button className={`c-tab ${activeTab === 'preview' ? 'active' : ''}`} onClick={() => setActiveTab('preview')}>
-            <Eye size="{14}"/> Live Web App
+        {(artifact.type === 'html' || artifact.type === 'presentation') && (
+          <button
+            className={`c-tab ${activeTab === 'preview' ? 'active' : ''}`}
+            onClick={() => setActiveTab('preview')}
+          >
+            🖥️ Live App Preview
           </button>
         )}
         {artifact.type === 'image' && (
-          <button className={`c-tab ${activeTab === 'image' ? 'active' : ''}`} onClick={() => setActiveTab('image')}>
-            <Sparkles size="{14}"/> Rendered Image
+          <button
+            className={`c-tab ${activeTab === 'image' ? 'active' : ''}`}
+            onClick={() => setActiveTab('image')}
+          >
+            🎨 Rendered Image
           </button>
         )}
-        <button className={`c-tab ${activeTab === 'code' ? 'active' : ''}`} onClick={() => setActiveTab('code')}>
-          <Code size="{14}"/> Raw Code & Structure
+        <button
+          className={`c-tab ${activeTab === 'code' ? 'active' : ''}`}
+          onClick={() => setActiveTab('code')}
+        >
+          💻 Source Code
         </button>
       </div>
 
-      {/* Workspace Body */}
       <div className="canvas-body">
-        {/* TAB 1: PRESENTATION SLIDE VIEWER */}
         {activeTab === 'slides' && deck && currentSlide && (
           <div className={`slide-deck-viewer theme-${presentationTheme}`}>
             <div className="slide-deck-controls">
               <div className="slide-theme-picker">
-                <Palette size="{14}"/>
+                <span>Theme:</span>
                 <button
                   className={presentationTheme === 'cyber' ? 'active' : ''}
                   onClick={() => setPresentationTheme('cyber')}
@@ -682,16 +1050,16 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   disabled={slideIndex === 0}
                   onClick={() => setSlideIndex(prev => Math.max(0, prev - 1))}
                 >
-                  <ChevronLeft size="{16}"/>
+                  ◄
                 </button>
                 <span>
-                  {slideIndex + 1} / {deck.slides.length}
+                  Slide {slideIndex + 1} / {deck.slides.length}
                 </span>
                 <button
                   disabled={slideIndex === deck.slides.length - 1}
                   onClick={() => setSlideIndex(prev => Math.min(deck.slides.length - 1, prev + 1))}
                 >
-                  <ChevronRight size="{16}"/>
+                  ►
                 </button>
               </div>
             </div>
@@ -699,7 +1067,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             <div className="slide-viewport">
               <div className="slide-content-card">
                 {currentSlide.layout === 'title' && (
-                  <div className="slide-title-view">
+                  <div>
                     <h1>{currentSlide.title}</h1>
                     {currentSlide.subtitle && <p className="slide-sub">{currentSlide.subtitle}</p>}
                     <div className="slide-meta-badge">{deck.author}</div>
@@ -707,7 +1075,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 )}
 
                 {currentSlide.layout === 'bullets' && (
-                  <div className="slide-standard-view">
+                  <div>
                     <h2>{currentSlide.title}</h2>
                     <ul className="slide-bullet-list">
                       {currentSlide.bullets?.map((b, i) => (
@@ -718,23 +1086,31 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 )}
 
                 {currentSlide.layout === 'two-column' && (
-                  <div className="slide-standard-view">
+                  <div>
                     <h2>{currentSlide.title}</h2>
                     <div className="slide-columns">
                       <div className="slide-col">
-                        <h4>Strategy Vector</h4>
-                        <ul>{currentSlide.leftColumn?.map((b, i) => <li key={i}>{b}</li>)}</ul>
+                        <h4>Core Vectors</h4>
+                        <ul>
+                          {currentSlide.leftColumn?.map((b, i) => (
+                            <li key={i}>• {b}</li>
+                          ))}
+                        </ul>
                       </div>
                       <div className="slide-col">
-                        <h4>Execution Target</h4>
-                        <ul>{currentSlide.rightColumn?.map((b, i) => <li key={i}>{b}</li>)}</ul>
+                        <h4>Target Outcomes</h4>
+                        <ul>
+                          {currentSlide.rightColumn?.map((b, i) => (
+                            <li key={i}>• {b}</li>
+                          ))}
+                        </ul>
                       </div>
                     </div>
                   </div>
                 )}
 
                 {currentSlide.layout === 'stats' && (
-                  <div className="slide-standard-view">
+                  <div>
                     <h2>{currentSlide.title}</h2>
                     <div className="slide-stats-grid">
                       {currentSlide.stats?.map((st, i) => (
@@ -765,8 +1141,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           </div>
         )}
 
-        {/* TAB 2: LIVE HTML RUNNER */}
-        {activeTab === 'preview' && artifact.type === 'html' && (
+        {activeTab === 'preview' && (
           <div className="html-runner-container">
             <iframe
               title={artifact.title}
@@ -777,7 +1152,6 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           </div>
         )}
 
-        {/* TAB 3: IMAGE STUDIO */}
         {activeTab === 'image' && (
           <div className="image-studio-container">
             {artifact.dataUrl && (
@@ -787,7 +1161,6 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           </div>
         )}
 
-        {/* TAB 4: RAW CODE VIEW */}
         {activeTab === 'code' && (
           <div className="code-inspector-container">
             <pre className="code-inspector-pre">
@@ -801,7 +1174,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 };
 
 // ============================================================================
-// 4. DEEP FILE RECOGNITION (PDF + OCR + MEDIAPIPE + CSV)
+// 5. DEEP FILE RECOGNITION (PDF + OCR + MEDIAPIPE + CSV)
 // ============================================================================
 
 let imageLandmarkerPromise: Promise<HandLandmarker> | null = null;
@@ -908,6 +1281,31 @@ async function inspectImageLocally(
   ];
 
   try {
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const { width, height } = canvas;
+      const data = ctx.getImageData(0, 0, width, height).data;
+      let rSum = 0;
+      let gSum = 0;
+      let bSum = 0;
+      let count = 0;
+      for (let i = 0; i < data.length; i += 16) {
+        rSum += data[i];
+        gSum += data[i + 1];
+        bSum += data[i + 2];
+        count++;
+      }
+      if (count > 0) {
+        report.push(
+          `Average RGB Color Profile: (${Math.round(rSum / count)}, ${Math.round(gSum / count)}, ${Math.round(
+            bSum / count
+          )})`
+        );
+      }
+    }
+  } catch {}
+
+  try {
     const landmarker = await getImageLandmarker();
     if (landmarker) {
       const res = landmarker.detect(img);
@@ -920,9 +1318,8 @@ async function inspectImageLocally(
           const middleOpen = lm[12].y < lm[10].y && d(lm[12], wrist) > d(lm[10], wrist);
           const ringOpen = lm[16].y < lm[14].y && d(lm[16], wrist) > d(lm[14], wrist);
           const pinkyOpen = lm[20].y < lm[18].y && d(lm[20], wrist) > d(lm[18], wrist);
-          const thumbOpen = d(lm[4], lm[17]) > d(lm[3], lm[17]) * 1.1;
 
-          let posture = 'Custom hand posture';
+          let posture = 'Hand gesture detected';
           if (middleOpen && !indexOpen && !ringOpen && !pinkyOpen) posture = 'Middle Finger Extended';
           else if (indexOpen && pinkyOpen && !middleOpen && !ringOpen) posture = 'Yo-Yo / Rock-On Sign (SEND)';
           else if (indexOpen && middleOpen && ringOpen && pinkyOpen) posture = 'Open Palm / ASL Letter B';
@@ -937,7 +1334,7 @@ async function inspectImageLocally(
 
   const ocrText = await extractTextFromImage(img, dataUrl);
   if (ocrText) {
-    report.push(`Extracted Text (OCR):\n"${ocrText.slice(0, 3000)}"`);
+    report.push(`Extracted Visible Text (OCR):\n"${ocrText.slice(0, 3000)}"`);
   }
 
   return report.join('\n');
@@ -949,8 +1346,12 @@ async function readPickedFile(file: File): Promise<LocalAttachment> {
   if (file.type.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'].includes(ext)) {
     return new Promise(resolve => {
       const reader = new FileReader();
+      reader.onerror = () =>
+        resolve({ name: file.name, size: file.size, mimeType: file.type, isImage: true, content: `[Image: ${file.name}]` });
       reader.onload = () => {
         const img = new Image();
+        img.onerror = () =>
+          resolve({ name: file.name, size: file.size, mimeType: file.type, isImage: true, content: `[Image: ${file.name}]` });
         img.onload = async () => {
           const maxDim = 512;
           let { width, height } = img;
@@ -1005,16 +1406,14 @@ async function readPickedFile(file: File): Promise<LocalAttachment> {
   }
 }
 
-// Parses code blocks to automatically extract runnable HTML artifacts or downloadable files
 export function parseArtifactsFromText(text: string): CanvasArtifact[] {
   const artifacts: CanvasArtifact[] = [];
 
-  // Match HTML blocks
   const htmlMatch = text.match(/```html\n([\s\S]*?)```/i);
   if (htmlMatch && htmlMatch[1].length > 30) {
     artifacts.push({
       id: crypto.randomUUID(),
-      title: 'Interactive Web Application',
+      title: 'Interactive HTML Web App',
       type: 'html',
       filename: 'index.html',
       mimeType: 'text/html',
@@ -1023,16 +1422,15 @@ export function parseArtifactsFromText(text: string): CanvasArtifact[] {
     });
   }
 
-  // Match Python, JS, TS, or CSV code files
   const genericMatch = text.match(/```(python|py|javascript|js|typescript|ts|csv|json)\n([\s\S]*?)```/i);
   if (genericMatch && genericMatch[2].length > 30 && !htmlMatch) {
     const lang = genericMatch[1].toLowerCase();
     const ext = lang.startsWith('py') ? 'py' : lang.startsWith('ts') ? 'ts' : lang === 'csv' ? 'csv' : 'js';
     artifacts.push({
       id: crypto.randomUUID(),
-      title: `${lang.toUpperCase()} Script`,
+      title: `${lang.toUpperCase()} File`,
       type: 'code',
-      filename: `script.${ext}`,
+      filename: `nova-script.${ext}`,
       mimeType: 'text/plain',
       content: genericMatch[2].trim(),
       timestamp: Date.now()
@@ -1042,8 +1440,90 @@ export function parseArtifactsFromText(text: string): CanvasArtifact[] {
   return artifacts;
 }
 
+// Multimodal Cloud Vision helper for attached images
+async function analyzeImagesWithVisionAI(
+  promptText: string,
+  images: LocalAttachment[],
+  settings: AppSettings
+): Promise<{ text: string; provider: string } | null> {
+  const validImages = images.filter(img => !!img.dataUrl);
+  if (validImages.length === 0 || !navigator.onLine) return null;
+
+  const localHints = validImages.map(img => img.localVisualReport).filter(Boolean).join('\n\n');
+  const userQuestion =
+    promptText.trim() ||
+    'Analyze this image thoroughly. Describe all visible subjects, text, hand gestures, and details.';
+
+  const anySettings = settings as any;
+  const geminiKey =
+    anySettings.geminiApiKey || anySettings.geminiKey || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+
+  if (geminiKey) {
+    try {
+      const parts: any[] = [{ text: userQuestion }];
+      for (const img of validImages) {
+        parts.push({
+          inlineData: {
+            mimeType: img.mimeType || 'image/jpeg',
+            data: img.dataUrl!.split(',')[1]
+          }
+        });
+      }
+      const res = await fetch(
+        `[https://generativelanguage.googleapis.com/v1beta/models/$](https://generativelanguage.googleapis.com/v1beta/models/$){
+          settings.geminiModel || 'gemini-2.5-flash'
+        }:generateContent?key=${geminiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts }] })
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const reply = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('\n');
+        if (reply && !isVisionRefusal(reply)) {
+          return { text: reply, provider: 'Cloud Vision · Gemini' };
+        }
+      }
+    } catch {}
+  }
+
+  const freeVisionModels = ['openai-large', 'gemini', 'openai'];
+  for (const modelName of freeVisionModels) {
+    try {
+      const contentParts: any[] = [
+        { type: 'text', text: `${userQuestion}\n\n[Local Sensor Context:\n${localHints}]` }
+      ];
+      for (const img of validImages) {
+        contentParts.push({ type: 'image_url', image_url: { url: img.dataUrl } });
+      }
+      const res = await fetch('[https://text.pollinations.ai/openai](https://text.pollinations.ai/openai)', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: modelName,
+          messages: [
+            { role: 'system', content: 'You are NOVA Vision AI. Inspect the image directly and answer clearly.' },
+            { role: 'user', content: contentParts }
+          ]
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const reply = data?.choices?.[0]?.message?.content;
+        if (reply && !isVisionRefusal(reply)) {
+          return { text: reply, provider: 'Cloud Vision · Multimodal' };
+        }
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
 // ============================================================================
-// 5. MAIN APPLICATION COMPONENT
+// 6. MAIN APPLICATION COMPONENT
 // ============================================================================
 
 export default function App() {
@@ -1061,16 +1541,15 @@ export default function App() {
       id: 'welcome',
       role: 'model',
       text:
-        '⚡ **NOVA (Jarvis + Ultron Generative Engine Active)**\n\n' +
-        '• **Interactive Canvas:** Type *"build a calculator in html"* or *"make a presentation on quantum computing"* to launch the live Canvas studio.\n' +
-        '• **Image Synthesis:** Type *"draw a futuristic arc reactor"* for instant AI generation.\n' +
-        '• **Deep File Recognition:** Attach any PDF, photo, CSV, or code file for instant scan and OCR.\n' +
-        '• **Full ASL Alphabet:** Sign A–Z hands-free, Thumbs Down (Clear), or Yo-Yo (Send).',
+        '⚡ **NOVA (Jarvis + Ultron Generative Canvas Active)**\n\n' +
+        '• **Live HTML Apps:** Type *"build a calculator in html"* to launch a working app inside Canvas.\n' +
+        '• **PPT Presentations:** Type *"make a presentation on artificial intelligence"* to open the interactive Slide Deck player & export `.ppt` / `.html`.\n' +
+        '• **Image Studio:** Type *"draw a futuristic arc reactor"* for online/offline image synthesis.\n' +
+        '• **Deep File & Image Scan:** Attach any Photo, PDF, CSV, or Code file.',
       timestamp: Date.now()
     }
   ]);
 
-  // Canvas Workspace State
   const [activeArtifact, setActiveArtifact] = useState<CanvasArtifact | null>(null);
   const [isCanvasOpen, setIsCanvasOpen] = useState(false);
   const [isCanvasMaximized, setIsCanvasMaximized] = useState(false);
@@ -1099,128 +1578,159 @@ export default function App() {
     chatEnd.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, typing]);
 
-  const speak = useCallback((text: string) => {
-    if (!settings.voiceEnabled || !('speechSynthesis' in window)) return;
-    speechSynthesis.cancel();
-    const clean = text.replace(/```[\s\S]*?```/g, 'Artifact compiled in Canvas.').slice(0, 400);
-    const u = new SpeechSynthesisUtterance(clean);
-    u.rate = 1.05;
-    speechSynthesis.speak(u);
-  }, [settings.voiceEnabled]);
+  const speak = useCallback(
+    (text: string) => {
+      if (!settings.voiceEnabled || !('speechSynthesis' in window)) return;
+      speechSynthesis.cancel();
+      const clean = text.replace(/```[\s\S]*?```/g, 'Artifact opened in Canvas.').slice(0, 400);
+      const u = new SpeechSynthesisUtterance(clean);
+      u.rate = 1.05;
+      speechSynthesis.speak(u);
+    },
+    [settings.voiceEnabled]
+  );
 
   const openArtifactInCanvas = (art: CanvasArtifact) => {
     setActiveArtifact(art);
     setIsCanvasOpen(true);
   };
 
-  const send = useCallback(async (value = input) => {
-    const text = value.trim();
-    if ((!text && attachments.length === 0) || typing) return;
+  const send = useCallback(
+    async (value = input) => {
+      const text = value.trim();
+      if ((!text && attachments.length === 0) || typing) return;
 
-    const currentAttachments = [...attachments];
-    const imageAttachments = currentAttachments.filter(a => a.isImage && a.dataUrl);
-    const fileNames = currentAttachments.map(a => `📎 ${a.name}`).join(', ');
-    const displayLabel = text
-      ? (fileNames ? `${text}\n(${fileNames})` : text)
-      : `Attached: ${fileNames}`;
+      const currentAttachments = [...attachments];
+      const imageAttachments = currentAttachments.filter(a => a.isImage && a.dataUrl);
+      const fileNames = currentAttachments.map(a => `📎 ${a.name}`).join(', ');
+      const displayLabel = text ? (fileNames ? `${text}\n(${fileNames})` : text) : `Attached: ${fileNames}`;
 
-    const userMsgId = crypto.randomUUID();
-    const userMsg: Message = { id: userMsgId, role: 'user', text: displayLabel, timestamp: Date.now() };
+      const userMsgId = crypto.randomUUID();
+      const userMsg: Message = { id: userMsgId, role: 'user', text: displayLabel, timestamp: Date.now() };
 
-    if (imageAttachments.length > 0) {
-      setMessageImages(prev => ({
-        ...prev,
-        [userMsgId]: imageAttachments.map(img => img.dataUrl!)
-      }));
-    }
+      if (imageAttachments.length > 0) {
+        setMessageImages(prev => ({
+          ...prev,
+          [userMsgId]: imageAttachments.map(img => img.dataUrl!)
+        }));
+      }
 
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
-    setAttachments([]);
-    setTyping(true);
+      setMessages(prev => [...prev, userMsg]);
+      setInput('');
+      setAttachments([]);
+      setTyping(true);
 
-    try {
-      // 1. PRESENTATION INTENT ROUTER
-      const isPresentation =
-        currentAttachments.length === 0 &&
-        /^(create|make|build|generate|design)\s+(a\s+)?(presentation|ppt|powerpoint|slides?|slide\s+deck)\b/i.test(text);
+      try {
+        // 1. PRESENTATION / PPT INTENT
+        const isPresentation =
+          currentAttachments.length === 0 &&
+          /\b(presentation|ppt|powerpoint|slide\s*deck|slides)\b/i.test(text) &&
+          /\b(create|make|build|generate|design|prepare)\b/i.test(text);
 
-      if (isPresentation) {
-        const deck = synthesizePresentationDeck(text);
-        const art: CanvasArtifact = {
-          id: crypto.randomUUID(),
-          title: deck.title,
-          type: 'presentation',
-          filename: `${deck.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.html`,
-          mimeType: 'text/html',
-          content: exportPresentationToHtml(deck),
-          deck,
-          timestamp: Date.now()
-        };
-        openArtifactInCanvas(art);
-        setProvider('Jarvis Presentation Engine');
-        const replyText = `📊 Created complete **${deck.slides.length}-Slide Presentation Deck** for "${deck.title}". Opened in Canvas.`;
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: replyText, timestamp: Date.now() }]);
-        speak(replyText);
+        if (isPresentation) {
+          const deck = synthesizePresentationDeck(text);
+          const art: CanvasArtifact = {
+            id: crypto.randomUUID(),
+            title: deck.title,
+            type: 'presentation',
+            filename: `${deck.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.html`,
+            mimeType: 'text/html',
+            content: exportPresentationToHtml(deck),
+            deck,
+            timestamp: Date.now()
+          };
+          openArtifactInCanvas(art);
+          setProvider('Jarvis Presentation Engine');
+          const replyText = `📊 Compiled a **${deck.slides.length}-Slide Presentation Deck** for **"${deck.title}"**.\n\nOpened in **Canvas Studio** where you can switch themes, present live, or download as **HTML Slides** or **PowerPoint (.PPT)**.`;
+          setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: replyText, timestamp: Date.now() }]);
+          speak(replyText);
+          setTyping(false);
+          return;
+        }
+
+        // 2. IMAGE GENERATION INTENT
+        const isImageRequest =
+          currentAttachments.length === 0 &&
+          /^(generate|create|draw|make|render)\s+(an?\s+)?(image|picture|photo|art|wallpaper|logo|diagram)\b/i.test(text);
+
+        if (isImageRequest) {
+          const imgArt = await generateVisualImageArtifact(text);
+          openArtifactInCanvas(imgArt);
+          setProvider(navigator.onLine ? 'Flux Vision Engine' : 'Offline Procedural Engine');
+          const replyText = `🎨 Rendered visual for **"${imgArt.title}"** and opened it inside **Canvas Studio**.`;
+          setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: replyText, timestamp: Date.now() }]);
+          speak(replyText);
+          setTyping(false);
+          return;
+        }
+
+        // 3. ATTACHED IMAGE MULTIMODAL VISION
+        if (imageAttachments.length > 0) {
+          const visionResult = await analyzeImagesWithVisionAI(text, imageAttachments, settings);
+          if (visionResult) {
+            setProvider(visionResult.provider);
+            setMessages(prev => [
+              ...prev,
+              { id: crypto.randomUUID(), role: 'model', text: visionResult.text, timestamp: Date.now() }
+            ]);
+            speak(visionResult.text);
+            setTyping(false);
+            return;
+          }
+        }
+
+        // 4. GENERAL AI / HTML APP / FILE ANALYSIS
+        const telemetryBlock =
+          currentAttachments.length > 0
+            ? '\n\n[DEEP FILE & VISION SENSOR DATA]:\n' +
+              currentAttachments.map(a => a.localVisualReport || a.content).join('\n\n')
+            : '';
+
+        const combinedPrompt =
+          (text || 'Analyze the attached files and provide a complete summary.') + telemetryBlock;
+
+        const result = await generateLocalOrCloud(combinedPrompt, messages, settings);
+
+        const finalReply =
+          imageAttachments.length > 0 && isVisionRefusal(result.text)
+            ? `**Local Deep Vision Analysis:**\n\n${imageAttachments.map(a => a.localVisualReport).join('\n\n')}`
+            : result.text;
+
+        const detectedArtifacts = parseArtifactsFromText(finalReply);
+        if (detectedArtifacts.length > 0) {
+          openArtifactInCanvas(detectedArtifacts[0]);
+        } else if (/\b(html|web\s*app|calculator|todo\s*app)\b/i.test(text) && /\b(build|create|make)\b/i.test(text)) {
+          openArtifactInCanvas(synthesizeOfflineHtmlApp(text));
+        }
+
+        setProvider(result.provider);
+        setMessages(prev => [
+          ...prev,
+          { id: crypto.randomUUID(), role: 'model', text: finalReply, timestamp: Date.now() }
+        ]);
+        speak(finalReply);
+      } catch {
+        // Offline Fallback: Still compiles HTML apps or returns local vision reports
+        if (/\b(html|web\s*app|calculator|todo)\b/i.test(text)) {
+          const appArt = synthesizeOfflineHtmlApp(text);
+          openArtifactInCanvas(appArt);
+        }
+        const fallback =
+          imageAttachments.length > 0
+            ? `**Offline Local Vision Analysis:**\n\n${imageAttachments.map(a => a.localVisualReport).join('\n\n')}`
+            : `**Jarvis Offline Core:** Processed command locally ("${text || fileNames}").`;
+        setProvider('Offline Local Core');
+        setMessages(prev => [
+          ...prev,
+          { id: crypto.randomUUID(), role: 'model', text: fallback, timestamp: Date.now() }
+        ]);
+        speak(fallback);
+      } finally {
         setTyping(false);
-        return;
       }
-
-      // 2. IMAGE INTENT ROUTER
-      const isImageRequest =
-        currentAttachments.length === 0 &&
-        /^(generate|create|draw|make|render)\s+(an?\s+)?(image|picture|photo|art|wallpaper|logo|diagram)\b/i.test(text);
-
-      if (isImageRequest) {
-        const imgArt = await generateVisualImageArtifact(text);
-        openArtifactInCanvas(imgArt);
-        setProvider(navigator.onLine ? 'Flux Vision Engine' : 'Offline Procedural Engine');
-        const replyText = `🎨 Generated visual for **"${imgArt.title}"**. Opened in Canvas.`;
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: replyText, timestamp: Date.now() }]);
-        speak(replyText);
-        setTyping(false);
-        return;
-      }
-
-      // 3. FILE / VISION / REASONING QUERY
-      const telemetryBlock = currentAttachments.length > 0
-        ? '\n\n[FILE & VISION SENSOR DATA]:\n' + currentAttachments.map(a => a.localVisualReport || a.content).join('\n\n')
-        : '';
-
-      const combinedPrompt =
-        (text || 'Analyze the attached files and provide full technical analysis.') + telemetryBlock;
-
-      const result = await generateLocalOrCloud(combinedPrompt, messages, settings);
-
-      let finalReply =
-        imageAttachments.length > 0 && isVisionRefusal(result.text)
-          ? `**Local Deep Vision Analysis:**\n\n${imageAttachments.map(a => a.localVisualReport).join('\n\n')}`
-          : result.text;
-
-      // Extract generated HTML Web Apps or Code and open directly in Canvas
-      const detectedArtifacts = parseArtifactsFromText(finalReply);
-      if (detectedArtifacts.length > 0) {
-        openArtifactInCanvas(detectedArtifacts[0]);
-      }
-
-      setProvider(result.provider);
-      setMessages(prev => [
-        ...prev,
-        { id: crypto.randomUUID(), role: 'model', text: finalReply, timestamp: Date.now() }
-      ]);
-      speak(finalReply);
-    } catch (err: any) {
-      const fallback = `**Jarvis Offline Agent:** Executed command locally ("${text || fileNames}").`;
-      setProvider('Offline Local Core');
-      setMessages(prev => [
-        ...prev,
-        { id: crypto.randomUUID(), role: 'model', text: fallback, timestamp: Date.now() }
-      ]);
-      speak(fallback);
-    } finally {
-      setTyping(false);
-    }
-  }, [input, messages, settings, typing, speak, attachments]);
+    },
+    [input, messages, settings, typing, speak, attachments]
+  );
 
   const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -1257,80 +1767,105 @@ export default function App() {
     r.start();
   };
 
-  const execute = useCallback((result: VisionResult) => {
-    const now = Date.now();
+  const execute = useCallback(
+    (result: VisionResult) => {
+      const now = Date.now();
 
-    if (result.type === 'LETTER' && result.value) {
-      const isSame = result.value === lastLetterRef.current;
-      const waitMs = isSame ? SAME_LETTER_COOLDOWN_MS : LETTER_COOLDOWN_MS;
-      if (now - lastLetterTimeRef.current < waitMs) return;
+      if (result.type === 'LETTER' && result.value) {
+        const isSame = result.value === lastLetterRef.current;
+        const waitMs = isSame ? SAME_LETTER_COOLDOWN_MS : LETTER_COOLDOWN_MS;
+        if (now - lastLetterTimeRef.current < waitMs) return;
 
-      lastLetterRef.current = result.value;
-      lastLetterTimeRef.current = now;
-      setInput(prev => prev + result.value);
-      return;
-    }
+        lastLetterRef.current = result.value;
+        lastLetterTimeRef.current = now;
+        setInput(prev => prev + result.value);
+        return;
+      }
 
-    if (result.value === 'CLEAR') {
-      if (now - lastGestureTimeRef.current < 900) return;
-      lastGestureTimeRef.current = now;
-      lastLetterRef.current = '';
-      setInput('');
-      return;
-    }
+      if (result.value === 'CLEAR') {
+        if (now - lastGestureTimeRef.current < 900) return;
+        lastGestureTimeRef.current = now;
+        lastLetterRef.current = '';
+        setInput('');
+        return;
+      }
 
-    if (result.value === 'SEND') {
-      if (now - lastGestureTimeRef.current < 1200) return;
-      lastGestureTimeRef.current = now;
-      lastLetterRef.current = '';
-      send();
-      return;
-    }
+      if (result.value === 'SEND') {
+        if (now - lastGestureTimeRef.current < 1200) return;
+        lastGestureTimeRef.current = now;
+        lastLetterRef.current = '';
+        send();
+        return;
+      }
 
-    if (result.value === 'THEME_SWITCH') return;
+      if (result.value === 'THEME_SWITCH') return;
 
-    const custom = settings.customGestures.find(g => g.name.toUpperCase() === result.value.toUpperCase());
-    if (!custom) return;
-    if (custom.action === 'CLEAR') setInput('');
-    else if (custom.action === 'COPY_LAST') navigator.clipboard?.writeText(messages.filter(m => m.role === 'model').at(-1)?.text || '');
-    else if (custom.action === 'TOGGLE_MIC') toggleMic();
-    else if (custom.action === 'SEND_MESSAGE') send();
-  }, [messages, settings.customGestures, send]);
+      const custom = settings.customGestures.find(g => g.name.toUpperCase() === result.value.toUpperCase());
+      if (!custom) return;
+      if (custom.action === 'CLEAR') setInput('');
+      else if (custom.action === 'COPY_LAST')
+        navigator.clipboard?.writeText(messages.filter(m => m.role === 'model').at(-1)?.text || '');
+      else if (custom.action === 'TOGGLE_MIC') toggleMic();
+      else if (custom.action === 'SEND_MESSAGE') send();
+    },
+    [messages, settings.customGestures, send]
+  );
 
   const onDetected = useCallback((result: VisionResult) => execute(result), [execute]);
   const vision = useVision(settings, settings.customGestures, onDetected);
-  const themeIcon = settings.theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>;
+  const themeIcon = settings.theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />;
 
   return (
     <div className={`app ${isCanvasOpen ? 'has-canvas-open' : ''}`}>
+      <style>{CANVAS_EMBEDDED_CSS}</style>
       <header>
         <div className="brand">
-          <div className="logo"><Sparkles size={20}/></div>
+          <div className="logo">
+            <Sparkles size={20} />
+          </div>
           <div>
             <h1>NOVA GESTURE AI</h1>
-            <span><i/> {settings.aiProvider === 'ollama' ? 'OFFLINE-FIRST' : 'JARVIS + ULTRON CANVAS'} · {provider}</span>
+            <span>
+              <i /> {settings.aiProvider === 'ollama' ? 'OFFLINE-FIRST' : 'JARVIS + ULTRON CANVAS'} · {provider}
+            </span>
           </div>
         </div>
         <div className="header-actions">
           {activeArtifact && !isCanvasOpen && (
-            <button className="canvas-pill-btn" onClick={() => setIsCanvasOpen(true)} title="Reopen Canvas">
-              <Sparkles size={14} /> Open Canvas
+            <button
+              onClick={() => setIsCanvasOpen(true)}
+              title="Reopen Canvas Studio"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                background: '#0284c7',
+                color: '#fff',
+                padding: '6px 12px',
+                borderRadius: 999,
+                fontSize: 12,
+                fontWeight: 700
+              }}
+            >
+              <Sparkles size={14} /> Canvas
             </button>
           )}
           <button title="Voice" onClick={() => setSettings(s => ({ ...s, voiceEnabled: !s.voiceEnabled }))}>
-            {settings.voiceEnabled ? <Mic/> : <MicOff/>}
+            {settings.voiceEnabled ? <Mic /> : <MicOff />}
           </button>
-          <button title="Theme" onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}>
+          <button
+            title="Theme"
+            onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}
+          >
             {themeIcon}
           </button>
           <button title="Settings" onClick={() => setSettingsOpen(true)}>
-            <Settings/>
+            <Settings />
           </button>
         </div>
       </header>
 
       <main className="app-workspace">
-        {/* Left: Camera & Capabilities */}
         <aside className="app-sidebar">
           <CameraView
             videoRef={vision.videoRef}
@@ -1342,24 +1877,42 @@ export default function App() {
           />
           <div className="capabilities">
             <div className="eyebrow">JARVIS + ULTRON CAPABILITIES</div>
-            <div className="cap"><span>Canvas Artifacts</span><b>HTML · PPT · IMAGES</b></div>
-            <div className="cap"><span>Deep Vision Scan</span><b>PDF · OCR · MEDIAPIPE</b></div>
-            <div className="cap"><span>Local Sign Engine</span><b>{vision.status === 'local' ? 'ACTIVE' : 'MODEL READY'}</b></div>
-            <div className="cap"><span>Autonomous Agent</span><b>OFFLINE RESILIENT</b></div>
-            <p><WifiOff size={14}/> Generate interactive web apps, presentations, and images that run and export offline.</p>
+            <div className="cap">
+              <span>Canvas Studio</span>
+              <b>HTML · PPT · IMAGES</b>
+            </div>
+            <div className="cap">
+              <span>Deep Vision Scan</span>
+              <b>PDF · OCR · MEDIAPIPE</b>
+            </div>
+            <div className="cap">
+              <span>Local Sign Engine</span>
+              <b>{vision.status === 'local' ? 'ACTIVE' : 'MODEL READY'}</b>
+            </div>
+            <div className="cap">
+              <span>Custom Gestures</span>
+              <b>{settings.customGestures.length}</b>
+            </div>
+            <p>
+              <WifiOff size={14} /> Generate live HTML web apps, PowerPoint slide decks, and images with full offline export.
+            </p>
           </div>
         </aside>
 
-        {/* Center: Chat Stream */}
         <section className="chat">
           <div className="chat-head">
-            <div><b>Assistant</b><span>Jarvis + Ultron Generative Core</span></div>
-            <button onClick={() => setMessages([])}><Trash2 size={16}/> Clear</button>
+            <div>
+              <b>Assistant</b>
+              <span>Jarvis + Ultron Generative Core</span>
+            </div>
+            <button onClick={() => setMessages([])}>
+              <Trash2 size={16} /> Clear
+            </button>
           </div>
           <div className="messages">
             {messages.map(m => (
               <div key={m.id} className={`message ${m.role}`}>
-                <div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div>
+                <div className="avatar">{m.role === 'user' ? <User size={15} /> : <Bot size={15} />}</div>
                 <div className="bubble">
                   {messageImages[m.id] && (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -1376,7 +1929,7 @@ export default function App() {
                   <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
                   {m.role === 'model' && (
                     <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}>
-                      <Copy size={13}/>
+                      <Copy size={13} />
                     </button>
                   )}
                 </div>
@@ -1384,23 +1937,43 @@ export default function App() {
             ))}
             {typing && (
               <div className="message model">
-                <div className="avatar"><Bot size={15}/></div>
+                <div className="avatar">
+                  <Bot size={15} />
+                </div>
                 <div className="bubble dots">● ● ●</div>
               </div>
             )}
-            <div ref={chatEnd}/>
+            <div ref={chatEnd} />
           </div>
 
           {attachments.length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '0 14px 8px', alignItems: 'center' }}>
               {attachments.map((a, i) => (
-                <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(148,163,184,0.15)', borderRadius: 999, padding: '4px 10px', fontSize: 12 }}>
+                <span
+                  key={i}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: 'rgba(148,163,184,0.15)',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: 12
+                  }}
+                >
                   {a.dataUrl && (
-                    <img src={a.dataUrl} alt={a.name} style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'cover' }} />
+                    <img
+                      src={a.dataUrl}
+                      alt={a.name}
+                      style={{ width: 20, height: 20, borderRadius: 4, objectFit: 'cover' }}
+                    />
                   )}
                   {a.name}
-                  <button style={{ display: 'flex' }} onClick={() => setAttachments(prev => prev.filter((_, idx) => idx !== i))}>
-                    <X size={12}/>
+                  <button
+                    style={{ display: 'flex' }}
+                    onClick={() => setAttachments(prev => prev.filter((_, idx) => idx !== i))}
+                  >
+                    <X size={12} />
                   </button>
                 </span>
               ))}
@@ -1410,10 +1983,10 @@ export default function App() {
           <input ref={fileInputRef} type="file" multiple hidden onChange={onFilePicked} />
           <div className="composer">
             <button className={listening ? 'active mic' : 'mic'} onClick={toggleMic}>
-              {listening ? <MicOff/> : <Mic/>}
+              {listening ? <MicOff /> : <Mic />}
             </button>
             <button className="mic" title="Attach PDF, photo, CSV, or code" onClick={() => fileInputRef.current?.click()}>
-              <Paperclip/>
+              <Paperclip />
             </button>
             <input
               value={input}
@@ -1421,13 +1994,17 @@ export default function App() {
               onKeyDown={e => e.key === 'Enter' && send()}
               placeholder="Ask anything, 'make presentation on...', 'build calculator in html', 'draw...', or sign…"
             />
-            <button id="nova-send-btn" className="send" onClick={() => send()} disabled={(!input.trim() && attachments.length === 0) || typing}>
-              <Send/>
+            <button
+              id="nova-send-btn"
+              className="send"
+              onClick={() => send()}
+              disabled={(!input.trim() && attachments.length === 0) || typing}
+            >
+              <Send />
             </button>
           </div>
         </section>
 
-        {/* Right / Split View: Interactive Canvas Workspace */}
         {activeArtifact && (
           <CanvasWorkspace
             artifact={activeArtifact}
@@ -1439,7 +2016,9 @@ export default function App() {
         )}
       </main>
 
-      {settingsOpen && <SettingsPanel settings={settings} onUpdate={setSettings} onClose={() => setSettingsOpen(false)}/>}
+      {settingsOpen && (
+        <SettingsPanel settings={settings} onUpdate={setSettings} onClose={() => setSettingsOpen(false)} />
+      )}
     </div>
   );
 }
