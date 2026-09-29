@@ -67,7 +67,7 @@ jobs:
               android:notificationTimeout="100" />
           EOF
 
-      - name: 7. Create UltronAccessibilityService.java (System-Wide Agent Control)
+      - name: 7. Create UltronAccessibilityService.java
         run: |
           mkdir -p android/app/src/main/java/com/nova/jarvis
           cat << 'EOF' > android/app/src/main/java/com/nova/jarvis/UltronAccessibilityService.java
@@ -149,7 +149,7 @@ jobs:
           }
           EOF
 
-      - name: 8. Create JarvisOverlayService.java (24/7 Background Service & Floating HUD Bubble)
+      - name: 8. Create JarvisOverlayService.java
         run: |
           cat << 'EOF' > android/app/src/main/java/com/nova/jarvis/JarvisOverlayService.java
           package com.nova.jarvis;
@@ -205,7 +205,7 @@ jobs:
                   Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
                       .setContentTitle("NOVA Jarvis + Ultron Active")
                       .setContentText("Running in background. Tap to open NOVA.")
-                      .setSmallIcon(android.R.drawable.ic_Dialog_Info)
+                      .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .setContentIntent(pi)
                       .setOngoing(true)
                       .build();
@@ -274,12 +274,10 @@ jobs:
                                   long elapsed = System.currentTimeMillis() - downTime;
                                   float moved = Math.hypot(event.getRawX() - touchX, event.getRawY() - touchY);
                                   if (moved < 18 && elapsed < 350) {
-                                      // Tap: Bring NOVA Jarvis AI to the foreground
                                       Intent i = new Intent(JarvisOverlayService.this, MainActivity.class);
                                       i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
                                       startActivity(i);
                                   } else if (moved < 18 && elapsed > 850) {
-                                      // Long press: Remove floating bubble
                                       removeBubble();
                                   }
                                   return true;
@@ -320,7 +318,7 @@ jobs:
           }
           EOF
 
-      - name: 9. Upgrade MainActivity.java with JavaScript-to-Android Ultron Bridge
+      - name: 9. Upgrade MainActivity.java with Persistent Camera & WebRTC Grant
         run: |
           cat << 'EOF' > android/app/src/main/java/com/nova/jarvis/MainActivity.java
           package com.nova.jarvis;
@@ -337,12 +335,12 @@ jobs:
           import android.view.WindowManager;
           import android.webkit.JavascriptInterface;
           import android.webkit.PermissionRequest;
-          import android.webkit.WebChromeClient;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
           import com.getcapacitor.BridgeActivity;
+          import com.getcapacitor.BridgeWebChromeClient;
           import java.util.ArrayList;
           import java.util.List;
 
@@ -364,6 +362,13 @@ jobs:
                   requestHardwarePermissions();
                   configureJarvisWebView();
                   startJarvisBackgroundService();
+              }
+
+              @Override
+              public void onResume() {
+                  super.onResume();
+                  // Re-apply BridgeWebChromeClient on resume so Capacitor never blocks getUserMedia camera stream
+                  attachCameraWebChromeClient();
               }
 
               private void startJarvisBackgroundService() {
@@ -396,25 +401,35 @@ jobs:
                   }
               }
 
+              private void attachCameraWebChromeClient() {
+                  if (this.bridge == null || this.bridge.getWebView() == null) return;
+                  WebView webView = this.bridge.getWebView();
+                  webView.setWebChromeClient(new BridgeWebChromeClient(this.bridge) {
+                      @Override
+                      public void onPermissionRequest(final PermissionRequest request) {
+                          runOnUiThread(() -> {
+                              try {
+                                  request.grant(request.getResources());
+                              } catch (Exception ignored) {}
+                          });
+                      }
+                  });
+              }
+
               private void configureJarvisWebView() {
                   if (this.bridge == null || this.bridge.getWebView() == null) return;
                   WebView webView = this.bridge.getWebView();
                   WebSettings settings = webView.getSettings();
                   settings.setJavaScriptEnabled(true);
                   settings.setDomStorageEnabled(true);
+                  settings.setDatabaseEnabled(true);
                   settings.setMediaPlaybackRequiresUserGesture(false);
                   settings.setAllowFileAccess(true);
                   settings.setAllowContentAccess(true);
+                  settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
-                  // Expose window.NovaAndroid to React UI
                   webView.addJavascriptInterface(new NovaNativeBridge(), "NovaAndroid");
-
-                  webView.setWebChromeClient(new WebChromeClient() {
-                      @Override
-                      public void onPermissionRequest(final PermissionRequest request) {
-                          runOnUiThread(() -> request.grant(request.getResources()));
-                      }
-                  });
+                  attachCameraWebChromeClient();
               }
 
               public class NovaNativeBridge {
@@ -525,7 +540,7 @@ jobs:
           }
           EOF
 
-      - name: 10. Register Jarvis Overlay & Ultron Accessibility Services in AndroidManifest.xml
+      - name: 10. Register Camera Features & Services in AndroidManifest.xml
         run: |
           python3 - << 'EOF'
           with open("android/app/src/main/AndroidManifest.xml", "r") as f:
@@ -543,6 +558,8 @@ jobs:
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
               <uses-feature android:name="android.hardware.camera" android:required="false" />
+              <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+              <uses-feature android:name="android.hardware.camera.front" android:required="false" />
               <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
           """
 
@@ -581,10 +598,9 @@ jobs:
               f.write(xml)
           EOF
 
-      - name: 11.fix Notification Icon Case & Compile Android APK
+      - name: 11. Compile Android APK
         working-directory: android
         run: |
-          sed -i 's/ic_Dialog_Info/ic_dialog_info/g' app/src/main/java/com/nova/jarvis/JarvisOverlayService.java
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
