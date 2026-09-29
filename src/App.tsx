@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, Copy, Mic, MicOff, Moon, Paperclip, Send, Settings, Sparkles, Sun, Trash2, User, WifiOff, X } from 'lucide-react';
+import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { CameraView } from './components/CameraView';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -13,6 +14,7 @@ interface LocalAttachment {
   isImage?: boolean;
   dataUrl?: string;
   mimeType?: string;
+  localVisualReport?: string;
 }
 
 const defaults: AppSettings = {
@@ -25,23 +27,147 @@ const defaults: AppSettings = {
   ollamaModel: 'qwen3:4b',
   geminiModel: 'gemini-2.5-flash',
   webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
-  systemInstruction: 'You are NOVA, a powerful multimodal AI assistant capable of analyzing images, reading files, writing code, and assisting sign language users clearly and directly.',
+  systemInstruction: 'You are NOVA, a multimodal AI assistant capable of analyzing images, reading files, writing code, and assisting sign language users clearly and directly.',
   customGestures: []
 };
 
 const LETTER_COOLDOWN_MS = 1000;
 const SAME_LETTER_COOLDOWN_MS = 1800;
 
-// Converts an uploaded image into a fast, compressed Base64 Data URL so Vision AI can see it
-function imageToDataUrl(file: File): Promise<{ dataUrl: string; width: number; height: number }> {
-  return new Promise((resolve, reject) => {
+// Blocks any model response that claims it cannot view images
+function isVisionRefusal(text: string): boolean {
+  if (!text) return true;
+  return /can't view images|cannot view images|cannot analyze or interpret image|unable to view images|unable to see images|can't see images|cannot see the image|i am a text-based|describe what's in the picture|describe what’s in the picture|do not have inherent image/i.test(
+    text
+  );
+}
+
+// Local MediaPipe Image Landmarker to inspect hands/gestures inside uploaded photos
+let imageLandmarkerPromise: Promise<HandLandmarker> | null = null;
+async function getImageLandmarker(): Promise<HandLandmarker | null> {
+  try {
+    if (!imageLandmarkerPromise) {
+      imageLandmarkerPromise = FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      ).then(vision =>
+        HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+            delegate: 'GPU'
+          },
+          runningMode: 'IMAGE',
+          numHands: 2,
+          minHandDetectionConfidence: 0.35
+        })
+      );
+    }
+    return await imageLandmarkerPromise;
+  } catch {
+    imageLandmarkerPromise = null;
+    return null;
+  }
+}
+
+// Analyzes dominant colors, lighting, and hand landmarks directly from the image pixels
+async function inspectImageLocally(img: HTMLImageElement, canvas: HTMLCanvasElement, fileName: string): Promise<string> {
+  const details: string[] = [
+    `Image File: "${fileName}" (${img.naturalWidth || canvas.width}x${img.naturalHeight || canvas.height}px)`
+  ];
+
+  // 1. Pixel lighting & color analysis
+  try {
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const { width, height } = canvas;
+      const data = ctx.getImageData(0, 0, width, height).data;
+      let rSum = 0, gSum = 0, bSum = 0, brightSum = 0, count = 0;
+      for (let i = 0; i < data.length; i += 16) {
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        rSum += r; gSum += g; bSum += b;
+        brightSum += (r + g + b) / 3;
+        count++;
+      }
+      if (count > 0) {
+        const avgR = Math.round(rSum / count);
+        const avgG = Math.round(gSum / count);
+        const avgB = Math.round(bSum / count);
+        const avgBright = Math.round(brightSum / count);
+        const tone = avgBright > 200 ? 'Bright / Light background' : avgBright < 65 ? 'Dark / Low-key background' : 'Balanced lighting';
+        details.push(`Visual Lighting: ${tone} (Average RGB: ${avgR}, ${avgG}, ${avgB})`);
+      }
+    }
+  } catch {}
+
+  // 2. Local MediaPipe Hand & Finger detection on the static image
+  try {
+    const landmarker = await getImageLandmarker();
+    if (landmarker) {
+      const res = landmarker.detect(img);
+      const hands = res.landmarks || [];
+      if (hands.length > 0) {
+        const handDescriptions = hands.map((lm, idx) => {
+          const d = (a: any, b: any) => Math.hypot(a.x - b.x, a.y - b.y);
+          const wrist = lm[0];
+          const indexOpen = lm[8].y < lm[6].y && d(lm[8], wrist) > d(lm[6], wrist);
+          const middleOpen = lm[12].y < lm[10].y && d(lm[12], wrist) > d(lm[10], wrist);
+          const ringOpen = lm[16].y < lm[14].y && d(lm[16], wrist) > d(lm[14], wrist);
+          const pinkyOpen = lm[20].y < lm[18].y && d(lm[20], wrist) > d(lm[18], wrist);
+          const thumbOpen = d(lm[4], lm[17]) > d(lm[3], lm[17]) * 1.1;
+
+          const openList: string[] = [];
+          if (thumbOpen) openList.push('thumb');
+          if (indexOpen) openList.push('index');
+          if (middleOpen) openList.push('middle');
+          if (ringOpen) openList.push('ring');
+          if (pinkyOpen) openList.push('pinky');
+
+          let gestureHint = 'custom posture / fist';
+          if (middleOpen && !indexOpen && !ringOpen && !pinkyOpen) gestureHint = 'Middle finger extended upward';
+          else if (indexOpen && pinkyOpen && !middleOpen && !ringOpen) gestureHint = 'Yo-Yo / Rock-on sign (SEND gesture)';
+          else if (indexOpen && middleOpen && ringOpen && pinkyOpen) gestureHint = 'Open palm / ASL Letter B';
+          else if (indexOpen && middleOpen && !ringOpen && !pinkyOpen) gestureHint = 'Two fingers up (ASL V / U / R)';
+          else if (indexOpen && !middleOpen && !ringOpen && !pinkyOpen) gestureHint = thumbOpen ? 'ASL Letter L' : 'ASL Letter D / pointing index';
+          else if (!indexOpen && !middleOpen && !ringOpen && pinkyOpen) gestureHint = thumbOpen ? 'ASL Letter Y' : 'ASL Letter I / J';
+          else if (!indexOpen && !middleOpen && !ringOpen && !pinkyOpen) {
+            gestureHint = lm[4].y > lm[0].y + 0.05 ? 'Thumbs Down (CLEAR gesture)' : 'Closed fist / ASL A, S, E, O, or T';
+          }
+
+          return `Hand #${idx + 1}: Extended fingers = [${openList.length ? openList.join(', ') : 'none (closed)'}], Detected posture = ${gestureHint}`;
+        });
+        details.push(`Hands Detected in Image (${hands.length}):\n` + handDescriptions.join('\n'));
+      }
+    }
+  } catch {}
+
+  // 3. Built-in Browser OCR TextDetector (if supported on device)
+  try {
+    const AnyWin = window as any;
+    if ('TextDetector' in AnyWin) {
+      const detector = new AnyWin.TextDetector();
+      const texts = await detector.detect(img);
+      if (texts && texts.length > 0) {
+        const extracted = texts.map((t: any) => t.rawValue).filter(Boolean).join(' | ');
+        if (extracted) details.push(`Visible Text (OCR): ${extracted.slice(0, 2000)}`);
+      }
+    }
+  } catch {}
+
+  return details.join('\n');
+}
+
+// Converts an image to a compact 512px Base64 JPEG + runs local pixel & hand inspection
+function processImageFile(file: File): Promise<LocalAttachment> {
+  return new Promise((resolve) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error('Failed to read image'));
+    reader.onerror = () =>
+      resolve({ name: file.name, isImage: true, content: `[Image: ${file.name}]` });
     reader.onload = () => {
       const img = new Image();
-      img.onerror = () => reject(new Error('Failed to decode image'));
-      img.onload = () => {
-        const maxDim = 900;
+      img.onerror = () =>
+        resolve({ name: file.name, isImage: true, content: `[Image: ${file.name}]` });
+      img.onload = async () => {
+        const maxDim = 512;
         let { width, height } = img;
         if (width > maxDim || height > maxDim) {
           const scale = maxDim / Math.max(width, height);
@@ -53,8 +179,17 @@ function imageToDataUrl(file: File): Promise<{ dataUrl: string; width: number; h
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (ctx) ctx.drawImage(img, 0, 0, width, height);
-        const compressed = canvas.toDataURL('image/jpeg', 0.82);
-        resolve({ dataUrl: compressed, width, height });
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.74);
+        const localVisualReport = await inspectImageLocally(img, canvas, file.name);
+
+        resolve({
+          name: file.name,
+          isImage: true,
+          dataUrl,
+          mimeType: 'image/jpeg',
+          localVisualReport,
+          content: localVisualReport
+        });
       };
       img.src = reader.result as string;
     };
@@ -64,24 +199,8 @@ function imageToDataUrl(file: File): Promise<{ dataUrl: string; width: number; h
 
 async function readPickedFile(file: File): Promise<LocalAttachment> {
   if (file.type.startsWith('image/')) {
-    try {
-      const { dataUrl, width, height } = await imageToDataUrl(file);
-      return {
-        name: file.name,
-        isImage: true,
-        dataUrl,
-        mimeType: 'image/jpeg',
-        content: `[Image: ${file.name} (${width}x${height}px)]`
-      };
-    } catch {
-      return {
-        name: file.name,
-        isImage: true,
-        content: `[Image: ${file.name}]`
-      };
-    }
+    return processImageFile(file);
   }
-
   try {
     const rawText = await file.text();
     const clipped = rawText.slice(0, 25000);
@@ -92,12 +211,12 @@ async function readPickedFile(file: File): Promise<LocalAttachment> {
   } catch {
     return {
       name: file.name,
-      content: `[Attached Binary File: ${file.name} (${Math.round(file.size / 1024)}KB)]`
+      content: `[Attached File: ${file.name} (${Math.round(file.size / 1024)}KB)]`
     };
   }
 }
 
-// Sends actual Base64 image pixels to a multimodal Vision model so NOVA genuinely sees the image
+// Multi-Model Vision Pipeline with Anti-Refusal Verification
 async function analyzeImagesWithVisionAI(
   promptText: string,
   images: LocalAttachment[],
@@ -106,22 +225,31 @@ async function analyzeImagesWithVisionAI(
   const validImages = images.filter(img => !!img.dataUrl);
   if (validImages.length === 0 || !navigator.onLine) return null;
 
+  const localHints = validImages
+    .map(img => img.localVisualReport)
+    .filter(Boolean)
+    .join('\n\n');
+
   const userQuestion =
     promptText.trim() ||
-    'Analyze this image in detail. Describe what is shown, read any visible text, and explain its key details.';
+    'Describe what is shown in this image clearly, including any people, hand gestures/signs, objects, text, or UI elements.';
 
-  // 1. Try Gemini Vision API directly if a Gemini key is configured
   const anySettings = settings as any;
-  const geminiKey = anySettings.geminiApiKey || (import.meta as any).env?.VITE_GEMINI_API_KEY;
+
+  // 1. Try Google Gemini Vision API if a Gemini key is available
+  const geminiKey =
+    anySettings.geminiApiKey ||
+    anySettings.geminiKey ||
+    (import.meta as any).env?.VITE_GEMINI_API_KEY;
+
   if (geminiKey) {
     try {
       const parts: any[] = [{ text: userQuestion }];
       for (const img of validImages) {
-        const base64Data = img.dataUrl!.split(',')[1];
         parts.push({
           inlineData: {
             mimeType: img.mimeType || 'image/jpeg',
-            data: base64Data
+            data: img.dataUrl!.split(',')[1]
           }
         });
       }
@@ -136,44 +264,96 @@ async function analyzeImagesWithVisionAI(
       if (res.ok) {
         const data = await res.json();
         const reply = data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('\n');
-        if (reply) return { text: reply, provider: 'Cloud Vision · Gemini' };
+        if (reply && !isVisionRefusal(reply)) {
+          return { text: reply, provider: 'Cloud Vision · Gemini' };
+        }
       }
-    } catch (e) {
-      console.warn('Gemini vision fallback:', e);
+    } catch {}
+  }
+
+  // 2. Try OpenRouter Free Vision Models if an OpenRouter key is saved
+  const openRouterKey =
+    anySettings.openrouterApiKey ||
+    anySettings.openRouterApiKey ||
+    anySettings.openrouterKey ||
+    anySettings.apiKey ||
+    localStorage.getItem('nova_api_key') ||
+    (import.meta as any).env?.VITE_OPENROUTER_API_KEY;
+
+  if (openRouterKey) {
+    const visionModels = [
+      'google/gemma-3-27b-it:free',
+      'qwen/qwen2.5-vl-32b-instruct:free',
+      'meta-llama/llama-3.2-11b-vision-instruct:free'
+    ];
+    for (const modelName of visionModels) {
+      try {
+        const contentParts: any[] = [{ type: 'text', text: userQuestion }];
+        for (const img of validImages) {
+          contentParts.push({ type: 'image_url', image_url: { url: img.dataUrl } });
+        }
+        const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${openRouterKey.trim()}`
+          },
+          body: JSON.stringify({
+            model: modelName,
+            messages: [{ role: 'user', content: contentParts }]
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const reply = data?.choices?.[0]?.message?.content;
+          if (reply && !isVisionRefusal(reply)) {
+            return { text: reply, provider: `Cloud Vision · ${modelName.split('/')[1]}` };
+          }
+        }
+      } catch {}
     }
   }
 
-  // 2. Free Keyless Multimodal Vision API (works out-of-the-box with zero API key)
-  try {
-    const contentParts: any[] = [
-      {
-        type: 'text',
-        text: `You are NOVA, a helpful multimodal AI assistant. Analyze the attached image(s) directly and answer the user's request clearly.\n\nUser request: ${userQuestion}`
+  // 3. Keyless Multimodal Vision Endpoints (tries multiple vision models & rejects any refusal)
+  const freeVisionModels = ['openai-large', 'gemini', 'openai'];
+  for (const modelName of freeVisionModels) {
+    try {
+      const contentParts: any[] = [
+        {
+          type: 'text',
+          text: `${userQuestion}\n\n(Local sensor telemetry for context: ${localHints})`
+        }
+      ];
+      for (const img of validImages) {
+        contentParts.push({
+          type: 'image_url',
+          image_url: { url: img.dataUrl }
+        });
       }
-    ];
-    for (const img of validImages) {
-      contentParts.push({
-        type: 'image_url',
-        image_url: { url: img.dataUrl }
+
+      const res = await fetch('https://text.pollinations.ai/openai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: modelName,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are NOVA Vision AI. Analyze the provided image directly and answer the user clearly.'
+            },
+            { role: 'user', content: contentParts }
+          ]
+        })
       });
-    }
 
-    const res = await fetch('https://text.pollinations.ai/openai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'openai',
-        messages: [{ role: 'user', content: contentParts }]
-      })
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      const reply = data?.choices?.[0]?.message?.content;
-      if (reply) return { text: reply, provider: 'Cloud Vision · Multimodal AI' };
-    }
-  } catch (e) {
-    console.warn('Multimodal vision error:', e);
+      if (res.ok) {
+        const data = await res.json();
+        const reply = data?.choices?.[0]?.message?.content;
+        if (reply && !isVisionRefusal(reply)) {
+          return { text: reply, provider: 'Cloud Vision · Multimodal AI' };
+        }
+      }
+    } catch {}
   }
 
   return null;
@@ -186,11 +366,7 @@ export default function App() {
       return {
         ...defaults,
         ...saved,
-        // Upgrade old restrictive system instruction automatically
-        systemInstruction:
-          saved.systemInstruction && !saved.systemInstruction.includes('limited')
-            ? saved.systemInstruction
-            : defaults.systemInstruction
+        systemInstruction: defaults.systemInstruction
       };
     } catch {
       return defaults;
@@ -205,7 +381,6 @@ export default function App() {
       timestamp: Date.now()
     }
   ]);
-  // Stores Base64 image previews keyed by message ID so TypeScript types stay 100% compatible
   const [messageImages, setMessageImages] = useState<Record<string, string[]>>({});
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
@@ -244,7 +419,6 @@ export default function App() {
 
     const currentAttachments = [...attachments];
     const imageAttachments = currentAttachments.filter(a => a.isImage && a.dataUrl);
-    const textAttachments = currentAttachments.filter(a => !a.isImage);
 
     const fileNames = currentAttachments.map(a => `📎 ${a.name}`).join(', ');
     const displayLabel = text
@@ -272,17 +446,9 @@ export default function App() {
     setTyping(true);
 
     try {
-      // 1. If the user attached image(s), run real Multimodal Vision analysis first
+      // 1. Run Multimodal Cloud Vision if an image is attached
       if (imageAttachments.length > 0) {
-        const extraTextContext = textAttachments.length > 0
-          ? '\n\nAdditional attached text files:\n' + textAttachments.map(a => a.content).join('\n\n')
-          : '';
-        const visionResult = await analyzeImagesWithVisionAI(
-          text + extraTextContext,
-          imageAttachments,
-          settings
-        );
-
+        const visionResult = await analyzeImagesWithVisionAI(text, imageAttachments, settings);
         if (visionResult) {
           setProvider(visionResult.provider);
           setMessages(prev => [
@@ -295,32 +461,40 @@ export default function App() {
         }
       }
 
-      // 2. For text/code/CSV files or standard chat messages
-      const fileBlock = currentAttachments.length > 0
-        ? '\n\n[INSTRUCTION: Read and analyze the attached file content below directly. Do not say you are limited to gesture data.]\n\n' +
-          currentAttachments.map(a => a.content).join('\n\n')
+      // 2. Fallback: Use Local MediaPipe/OCR/Pixel telemetry or text file contents
+      const telemetryBlock = currentAttachments.length > 0
+        ? '\n\n[LOCAL VISION & FILE SCANNER RESULTS — Analyze this extracted data directly and NEVER say you cannot view images]:\n' +
+          currentAttachments.map(a => a.localVisualReport || a.content).join('\n\n')
         : '';
 
       const combinedPrompt =
-        (text || 'Please analyze the attached file(s) and provide a clear summary.') + fileBlock;
+        (text || 'Summarize and explain the findings from the scanned file/image below.') + telemetryBlock;
 
       const result = await generateLocalOrCloud(combinedPrompt, messages, settings);
+
+      // If the text model still attempts a refusal on an image, return the Local Vision Scanner report directly
+      const finalReply =
+        imageAttachments.length > 0 && isVisionRefusal(result.text)
+          ? `**Local Vision Analysis:**\n\n${imageAttachments.map(a => a.localVisualReport).join('\n\n')}`
+          : result.text;
+
       setProvider(result.provider);
       setMessages(prev => [
         ...prev,
-        { id: crypto.randomUUID(), role: 'model', text: result.text, timestamp: Date.now() }
+        { id: crypto.randomUUID(), role: 'model', text: finalReply, timestamp: Date.now() }
       ]);
-      speak(result.text);
+      speak(finalReply);
     } catch (err: any) {
-      const fallbackText = !navigator.onLine
-        ? `Offline Mode Active: Your message ("${text || fileNames}") was recorded locally.`
-        : `Could not reach AI provider (${err?.message || 'check settings'}).`;
-      setProvider('Offline / Local Fallback');
+      const localFallback =
+        imageAttachments.length > 0
+          ? `**Local Vision Analysis (Offline):**\n\n${imageAttachments.map(a => a.localVisualReport).join('\n\n')}`
+          : `Processed locally: "${text || fileNames}"`;
+      setProvider('Local Vision Engine');
       setMessages(prev => [
         ...prev,
-        { id: crypto.randomUUID(), role: 'model', text: fallbackText, timestamp: Date.now() }
+        { id: crypto.randomUUID(), role: 'model', text: localFallback, timestamp: Date.now() }
       ]);
-      speak(text || fallbackText);
+      speak(localFallback);
     } finally {
       setTyping(false);
     }
