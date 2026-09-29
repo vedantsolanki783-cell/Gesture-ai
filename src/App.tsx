@@ -92,6 +92,9 @@ const defaults: AppSettings = {
 const LETTER_COOLDOWN_MS = 1000;
 const SAME_LETTER_COOLDOWN_MS = 1800;
 
+// Runtime module loader that bypasses Vite/Rollup static build analysis
+const runtimeImport = new Function('url', 'return import(url)') as (url: string) => Promise<any>;
+
 const CANVAS_EMBEDDED_CSS = `
 .app.has-canvas-open main.app-workspace {
   display: grid;
@@ -1206,9 +1209,8 @@ async function extractPdfText(file: File): Promise<string> {
   const arrayBuffer = await file.arrayBuffer();
   if (navigator.onLine) {
     try {
-      const pdfjsLib: any = await import(
-        /* @vite-ignore */ '[https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs](https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs)'
-      );
+      const pdfUrl = '[https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs](https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.min.mjs)';
+      const pdfjsLib: any = await runtimeImport(pdfUrl);
       pdfjsLib.GlobalWorkerOptions.workerSrc =
         '[https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs](https://cdn.jsdelivr.net/npm/pdfjs-dist@4.0.379/build/pdf.worker.min.mjs)';
       const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -1256,9 +1258,8 @@ async function extractTextFromImage(img: HTMLImageElement, dataUrl: string): Pro
 
   if (navigator.onLine) {
     try {
-      const Tesseract: any = await import(
-        /* @vite-ignore */ '[https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js](https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js)'
-      );
+      const tessUrl = '[https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js](https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js)';
+      const Tesseract: any = await runtimeImport(tessUrl);
       const res = await Tesseract.recognize(dataUrl, 'eng');
       const text = res?.data?.text?.trim();
       if (text && text.length > 2) return text;
