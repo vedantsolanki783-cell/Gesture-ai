@@ -4,10 +4,6 @@ import type { CustomGesture, Landmark, VisionResult } from '../types';
 const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const MODEL_PATH = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-// Timing tuned to work with your UI's frame buffer:
-// 1. HOLD_DELAY_MS (450ms): Wait while you form the sign so it doesn't trigger too fast
-// 2. EMIT_WINDOW_MS (280ms): Send the sign for ~5-6 frames so the UI types it exactly ONCE
-// 3. REPEAT_COOLDOWN_MS (1800ms): Block repeats so holding a sign never types "AAAA..."
 const HOLD_DELAY_MS = 450;
 const EMIT_WINDOW_MS = 280;
 const REPEAT_COOLDOWN_MS = 1800;
@@ -23,7 +19,10 @@ let candidateSign = '';
 let candidateStartTime = 0;
 let mismatchFrames = 0;
 
-// Short motion history for dynamic ASL letters J and Z
+// 7-frame majority-vote buffer to eliminate transition glitches
+const recentPredictions: VisionResult[] = [];
+
+// Short motion trails for dynamic ASL letters J and Z
 const indexTrail: { x: number; y: number; t: number }[] = [];
 const pinkyTrail: { x: number; y: number; t: number }[] = [];
 
@@ -34,9 +33,9 @@ async function getLandmarker() {
         baseOptions: { modelAssetPath: MODEL_PATH, delegate: 'GPU' },
         runningMode: 'VIDEO',
         numHands: 2,
-        minHandDetectionConfidence: 0.35,
-        minHandPresenceConfidence: 0.35,
-        minTrackingConfidence: 0.35
+        minHandDetectionConfidence: 0.45,
+        minHandPresenceConfidence: 0.45,
+        minTrackingConfidence: 0.45
       })
     );
   }
@@ -45,10 +44,33 @@ async function getLandmarker() {
 
 const d = (a: Landmark, b: Landmark) => Math.hypot(a.x - b.x, a.y - b.y);
 
+// Calculates the 2D bend angle at a finger's middle joint (180 deg = straight, <120 deg = curled)
+function jointAngleDeg(mcp: Landmark, pip: Landmark, tip: Landmark): number {
+  const v1x = mcp.x - pip.x;
+  const v1y = mcp.y - pip.y;
+  const v2x = tip.x - pip.x;
+  const v2y = tip.y - pip.y;
+  const dot = v1x * v2x + v1y * v2y;
+  const mag = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y);
+  if (mag === 0) return 180;
+  const cos = Math.max(-1, Math.min(1, dot / mag));
+  return (Math.acos(cos) * 180) / Math.PI;
+}
+
+// Projects a point onto the knuckle line from Index MCP (0.0) to Pinky MCP (1.0)
+// Works identically for Left or Right hands so A, T, N, M, S never get confused
+function palmProgress(lm: Landmark[], pt: Landmark): number {
+  const vx = lm[17].x - lm[5].x;
+  const vy = lm[17].y - lm[5].y;
+  const lenSq = vx * vx + vy * vy;
+  if (lenSq < 1e-6) return 0;
+  return ((pt.x - lm[5].x) * vx + (pt.y - lm[5].y) * vy) / lenSq;
+}
+
 function recordTrail(trail: { x: number; y: number; t: number }[], pt: Landmark) {
   const now = Date.now();
   trail.push({ x: pt.x, y: pt.y, t: now });
-  while (trail.length > 0 && now - trail[0].t > 550) {
+  while (trail.length > 0 && now - trail[0].t > 500) {
     trail.shift();
   }
 }
@@ -65,34 +87,29 @@ function getTrailSpan(trail: { x: number; y: number; t: number }[]) {
   return { dx: maxX - minX, dy: maxY - minY, total: Math.hypot(maxX - minX, maxY - minY) };
 }
 
-// 1. Detects the 2nd Image Gesture: Two horizontal hands held one above the other
+// 1. Detects Two Horizontal Stacked Hands
 function isTwoStackedHorizontalHands(h1: Landmark[], h2: Landmark[]): boolean {
   if (!h1 || !h2 || h1.length < 21 || h2.length < 21) return false;
-
   const isHoriz = (lm: Landmark[]) =>
     Math.abs(lm[9].x - lm[0].x) > Math.abs(lm[9].y - lm[0].y) * 0.75 &&
     Math.abs(lm[12].x - lm[0].x) > Math.abs(lm[12].y - lm[0].y) * 0.75;
-
   const verticalGap = Math.abs(h1[9].y - h2[9].y);
   const horizontalOverlap = Math.abs(h1[9].x - h2[9].x);
-
   return isHoriz(h1) && isHoriz(h2) && verticalGap > 0.1 && horizontalOverlap < 0.5;
 }
 
-// 2. Detects Two-Hand Middle Finger Gesture (works for both left & right hands, palm in or out)
+// 2. Detects Two-Hand Middle Finger Gesture
 function isOnlyMiddleFinger(lm: Landmark[]): boolean {
   if (!lm || lm.length < 21) return false;
   const palm = Math.max(d(lm[0], lm[9]), 0.05);
-  const middleUp = lm[12].y < lm[10].y && d(lm[12], lm[0]) > d(lm[10], lm[0]) * 1.08;
-  // Middle fingertip must be noticeably higher than index, ring, and pinky fingertips
-  const highestTip =
-    lm[12].y < lm[8].y - palm * 0.28 &&
-    lm[12].y < lm[16].y - palm * 0.28 &&
-    lm[12].y < lm[20].y - palm * 0.28;
-  return middleUp && highestTip;
+  const middleStraight = jointAngleDeg(lm[9], lm[10], lm[12]) > 140 && lm[12].y < lm[10].y;
+  const othersCurled =
+    lm[12].y < lm[8].y - palm * 0.3 &&
+    lm[12].y < lm[16].y - palm * 0.3 &&
+    lm[12].y < lm[20].y - palm * 0.3;
+  return middleStraight && othersCurled;
 }
 
-// Shows a visible floating cursor and mode badge when Mouseless Mode is toggled
 function showModeNotification(isMouseless: boolean) {
   let badge = document.getElementById('nova-mode-badge');
   if (!badge) {
@@ -191,7 +208,7 @@ function triggerInputAction(action: 'CLEAR' | 'SEND') {
   }
 }
 
-// Complete 26-Letter ASL Classifier (A-Z) matching your ASL Alphabet Chart
+// High-Precision 26-Letter ASL Classifier (A-Z)
 function classifyRaw(lm: Landmark[]): VisionResult {
   if (!lm || lm.length < 21) {
     return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
@@ -204,156 +221,241 @@ function classifyRaw(lm: Landmark[]): VisionResult {
   const palm = Math.max(d(wrist, lm[9]), 0.05);
   const nd = (a: Landmark, b: Landmark) => d(a, b) / palm;
 
-  // Upright finger checks
-  const indexUp = lm[8].y < lm[6].y && nd(lm[8], wrist) > nd(lm[6], wrist) * 1.04;
-  const middleUp = lm[12].y < lm[10].y && nd(lm[12], wrist) > nd(lm[10], wrist) * 1.04;
-  const ringUp = lm[16].y < lm[14].y && nd(lm[16], wrist) > nd(lm[14], wrist) * 1.04;
-  const pinkyUp = lm[20].y < lm[18].y && nd(lm[20], wrist) > nd(lm[18], wrist) * 1.04;
+  // Joint angles (180 = straight, <125 = curled)
+  const idxAngle = jointAngleDeg(lm[5], lm[6], lm[8]);
+  const midAngle = jointAngleDeg(lm[9], lm[10], lm[12]);
+  const rngAngle = jointAngleDeg(lm[13], lm[14], lm[16]);
+  const pnkAngle = jointAngleDeg(lm[17], lm[18], lm[20]);
 
-  // Orientation-independent extension checks (for sideways/downward signs G, H, P, Q)
-  const indexExt = nd(lm[8], wrist) > nd(lm[6], wrist) * 1.06 && nd(lm[8], lm[5]) > nd(lm[6], lm[5]) * 1.04;
-  const middleExt = nd(lm[12], wrist) > nd(lm[10], wrist) * 1.06 && nd(lm[12], lm[9]) > nd(lm[10], lm[9]) * 1.04;
-  const ringExt = nd(lm[16], wrist) > nd(lm[14], wrist) * 1.06;
-  const pinkyExt = nd(lm[20], wrist) > nd(lm[18], wrist) * 1.06;
+  // Upright finger checks combining angle + height
+  const indexUp = idxAngle > 138 && lm[8].y < lm[6].y && nd(lm[8], wrist) > nd(lm[5], wrist) * 1.15;
+  const middleUp = midAngle > 138 && lm[12].y < lm[10].y && nd(lm[12], wrist) > nd(lm[9], wrist) * 1.15;
+  const ringUp = rngAngle > 138 && lm[16].y < lm[14].y && nd(lm[16], wrist) > nd(lm[13], wrist) * 1.12;
+  const pinkyUp = pnkAngle > 135 && lm[20].y < lm[18].y && nd(lm[20], wrist) > nd(lm[17], wrist) * 1.1;
 
-  const thumbOut = d(lm[4], lm[17]) > d(lm[2], lm[17]) * 1.14;
+  // Rotation-independent extension for horizontal/downward signs (G, H, P, Q)
+  const indexExt = idxAngle > 138 && nd(lm[8], wrist) > nd(lm[6], wrist) * 1.08;
+  const middleExt = midAngle > 138 && nd(lm[12], wrist) > nd(lm[10], wrist) * 1.08;
+  const ringExt = rngAngle > 138 && nd(lm[16], wrist) > nd(lm[14], wrist) * 1.08;
+  const pinkyExt = pnkAngle > 135 && nd(lm[20], wrist) > nd(lm[18], wrist) * 1.08;
+
+  // Thumb position along palm (t < 0 = outside index finger, 0..1 = across palm)
+  const thumbPalmPos = palmProgress(lm, lm[4]);
+  const thumbOut = d(lm[4], lm[17]) > d(lm[2], lm[17]) * 1.15 && thumbPalmPos < 0.12;
   const thumbUp = lm[4].y < lm[3].y && lm[3].y < lm[2].y;
-  const indexHalf = !indexUp && lm[6].y < lm[5].y && lm[8].y >= lm[6].y;
-  const isHorizontal = Math.abs(lm[8].x - lm[5].x) > Math.abs(lm[8].y - lm[5].y) * 1.15;
+  const isHorizontal = Math.abs(lm[8].x - lm[5].x) > Math.abs(lm[8].y - lm[5].y) * 1.25;
+
+  const allFingersClosed = !indexUp && !middleUp && !ringUp && !pinkyUp;
 
   // 1. Thumbs Down (👎) -> CLEAR ALL TEXT
-  const allFingersClosed = !indexUp && !middleUp && !ringUp && !pinkyUp;
   const thumbPointingDown =
     lm[4].y > lm[3].y &&
-    lm[4].y > lm[5].y + palm * 0.28 &&
-    lm[4].y > wrist.y + palm * 0.32;
+    lm[4].y > lm[5].y + palm * 0.32 &&
+    lm[4].y > wrist.y + palm * 0.35;
   if (thumbPointingDown && allFingersClosed && !indexExt) {
-    return { type: 'GESTURE', value: 'CLEAR', confidence: 0.95, source: 'local' };
+    return { type: 'GESTURE', value: 'CLEAR', confidence: 0.96, source: 'local' };
   }
 
   // 2. Yo-Yo Sign (🤘: Index + Pinky up, Middle + Ring curled) -> SEND MESSAGE
   if (indexUp && !middleUp && !ringUp && pinkyUp) {
-    return { type: 'GESTURE', value: 'SEND', confidence: 0.95, source: 'local' };
+    return { type: 'GESTURE', value: 'SEND', confidence: 0.96, source: 'local' };
   }
 
-  // 3. Sideways & Downward ASL Signs: Q, P, H, G
-  if (lm[8].y > lm[5].y + palm * 0.3 && lm[4].y > lm[2].y + palm * 0.2 && !middleUp && !ringUp && !pinkyUp) {
-    return { type: 'LETTER', value: 'Q', confidence: 0.88, source: 'local' };
+  // 3. Downward & Sideways Signs: Q, P, H, G
+  if (lm[8].y > lm[5].y + palm * 0.32 && lm[4].y > lm[2].y + palm * 0.2 && !middleUp && !ringUp && !pinkyUp) {
+    return { type: 'LETTER', value: 'Q', confidence: 0.9, source: 'local' };
   }
   if (isHorizontal && indexExt && !ringExt && !pinkyExt) {
     if (middleExt) {
-      const middleDropped = lm[12].y > lm[8].y + palm * 0.22 || lm[12].y > lm[9].y + palm * 0.18;
-      return { type: 'LETTER', value: middleDropped ? 'P' : 'H', confidence: 0.89, source: 'local' };
+      const middleDropped = lm[12].y > lm[8].y + palm * 0.22;
+      return { type: 'LETTER', value: middleDropped ? 'P' : 'H', confidence: 0.9, source: 'local' };
     }
-    if (lm[12].y > lm[9].y + palm * 0.25) {
-      return { type: 'LETTER', value: 'P', confidence: 0.88, source: 'local' };
+    if (lm[12].y > lm[9].y + palm * 0.28) {
+      return { type: 'LETTER', value: 'P', confidence: 0.89, source: 'local' };
     }
-    return { type: 'LETTER', value: 'G', confidence: 0.89, source: 'local' };
+    return { type: 'LETTER', value: 'G', confidence: 0.9, source: 'local' };
   }
 
-  // 4. All 4 fingers straight up -> B
+  // 4. All 4 Fingers Straight Up -> B
   if (indexUp && middleUp && ringUp && pinkyUp) {
-    return { type: 'LETTER', value: 'B', confidence: 0.93, source: 'local' };
+    return { type: 'LETTER', value: 'B', confidence: 0.94, source: 'local' };
   }
 
-  // 5. 3 fingers up -> W or F
+  // 5. Three Fingers Straight Up -> W or F
   if (indexUp && middleUp && ringUp && !pinkyUp) {
-    return { type: 'LETTER', value: 'W', confidence: 0.93, source: 'local' };
+    return { type: 'LETTER', value: 'W', confidence: 0.94, source: 'local' };
   }
-  if (!indexUp && middleUp && ringUp && pinkyUp) {
-    return { type: 'LETTER', value: 'F', confidence: 0.92, source: 'local' };
+  if (!indexUp && middleUp && ringUp && pinkyUp && nd(lm[4], lm[8]) < 0.65) {
+    return { type: 'LETTER', value: 'F', confidence: 0.93, source: 'local' };
   }
 
-  // 6. Only Pinky up -> Y, J, I
-  if (!indexUp && !middleUp && !ringUp && (pinkyUp || pinkyExt)) {
+  // 6. Only Pinky Up -> Y, J, I
+  if (!indexUp && !middleUp && !ringUp && pinkyUp) {
     if (thumbOut) {
-      return { type: 'LETTER', value: 'Y', confidence: 0.93, source: 'local' };
+      return { type: 'LETTER', value: 'Y', confidence: 0.94, source: 'local' };
     }
     const pMove = getTrailSpan(pinkyTrail);
-    const pinkyTilted = Math.abs(lm[20].x - lm[17].x) > Math.abs(lm[20].y - lm[17].y) * 0.62;
-    if (pMove.total > 0.055 || pinkyTilted) {
-      return { type: 'LETTER', value: 'J', confidence: 0.89, source: 'local' };
+    // J only triggers when you swoop/move your pinky (holding steady always gives I)
+    if (pMove.total > 0.055) {
+      return { type: 'LETTER', value: 'J', confidence: 0.9, source: 'local' };
     }
-    return { type: 'LETTER', value: 'I', confidence: 0.91, source: 'local' };
+    return { type: 'LETTER', value: 'I', confidence: 0.93, source: 'local' };
   }
 
-  // 7. Index + Middle up -> R, K, V, U
+  // 7. Index + Middle Up -> R, K, V, U
   if (indexUp && middleUp && !ringUp && !pinkyUp) {
-    const spread = nd(lm[8], lm[12]);
-    // R: Index and middle crossed or overlapping tightly
-    if ((lm[8].x - lm[12].x) * (lm[5].x - lm[9].x) < 0 || spread < 0.22) {
-      return { type: 'LETTER', value: 'R', confidence: 0.89, source: 'local' };
+    const tipSpread = nd(lm[8], lm[12]);
+    const baseSpread = nd(lm[5], lm[9]);
+
+    // R: Index and middle fingers cross over each other (tips swap horizontal order relative to knuckles)
+    const fingersCrossed = (lm[8].x - lm[12].x) * (lm[5].x - lm[9].x) < -0.0002;
+    if (fingersCrossed) {
+      return { type: 'LETTER', value: 'R', confidence: 0.91, source: 'local' };
     }
-    // K: Thumb tucked up between index and middle
-    if (thumbOut && nd(lm[4], lm[10]) < 0.72) {
-      return { type: 'LETTER', value: 'K', confidence: 0.89, source: 'local' };
+
+    // K: Fingers separated AND thumb tip raised up between index and middle fingers
+    const thumbBetweenFingers =
+      lm[4].y < lm[5].y &&
+      nd(lm[4], lm[6]) < 0.55 &&
+      nd(lm[4], lm[10]) < 0.55 &&
+      tipSpread > 0.28;
+    if (thumbBetweenFingers) {
+      return { type: 'LETTER', value: 'K', confidence: 0.9, source: 'local' };
     }
-    // V: Spread apart vs U: Held together
-    if (spread > 0.42) {
-      return { type: 'LETTER', value: 'V', confidence: 0.93, source: 'local' };
+
+    // V vs U: Spread wide apart = V, held parallel/touching = U
+    if (tipSpread > baseSpread * 1.25 || tipSpread > 0.38) {
+      return { type: 'LETTER', value: 'V', confidence: 0.94, source: 'local' };
     }
-    return { type: 'LETTER', value: 'U', confidence: 0.9, source: 'local' };
+    return { type: 'LETTER', value: 'U', confidence: 0.93, source: 'local' };
   }
 
-  // 8. Only Index up -> L, Z, D
+  // 8. Only Index Up -> L, Z, D
   if (indexUp && !middleUp && !ringUp && !pinkyUp) {
-    if (thumbOut && nd(lm[4], lm[8]) > 0.9) {
-      return { type: 'LETTER', value: 'L', confidence: 0.94, source: 'local' };
+    // L: Thumb extended outward forming an L shape
+    if (thumbOut && nd(lm[4], lm[8]) > 0.92) {
+      return { type: 'LETTER', value: 'L', confidence: 0.95, source: 'local' };
     }
+    // Z: Only triggers when index finger moves horizontally in a Z stroke
     const iMove = getTrailSpan(indexTrail);
-    if (iMove.dx > 0.055) {
-      return { type: 'LETTER', value: 'Z', confidence: 0.89, source: 'local' };
+    if (iMove.dx > 0.05) {
+      return { type: 'LETTER', value: 'Z', confidence: 0.9, source: 'local' };
     }
-    if (nd(lm[4], lm[12]) < 0.68) {
-      return { type: 'LETTER', value: 'D', confidence: 0.9, source: 'local' };
-    }
-    return { type: 'LETTER', value: 'Z', confidence: 0.87, source: 'local' };
+    // D: Steady upright index finger with other fingers curled
+    return { type: 'LETTER', value: 'D', confidence: 0.92, source: 'local' };
   }
 
-  // 9. Closed Fist / Curved Hand Shapes -> C, X, O, A, E, T, N, M, S
+  // 9. Fist & Curved Shapes -> X, C, O, E, A, T, N, M, S
   if (allFingersClosed) {
     const thumbIndex = nd(lm[4], lm[8]);
     const thumbMiddle = nd(lm[4], lm[12]);
 
-    if (indexHalf) {
-      if (thumbOut && thumbIndex > 0.65) {
-        return { type: 'LETTER', value: 'C', confidence: 0.88, source: 'local' };
-      }
-      return { type: 'LETTER', value: 'X', confidence: 0.88, source: 'local' };
+    // X: Index knuckle raised high above middle knuckle with index bent like a hook
+    const indexHooked =
+      lm[6].y < lm[10].y - palm * 0.18 &&
+      lm[8].y > lm[6].y &&
+      idxAngle > 55 &&
+      idxAngle < 135;
+    if (indexHooked) {
+      return { type: 'LETTER', value: 'X', confidence: 0.89, source: 'local' };
     }
-    if (thumbIndex < 0.52 && thumbMiddle < 0.65) {
-      return { type: 'LETTER', value: 'O', confidence: 0.9, source: 'local' };
+
+    // Check if fingers are arched outward (for C and O) vs tightly folded into palm (for A, S, T, N, M)
+    const fingersArched =
+      midAngle > 75 &&
+      nd(lm[8], lm[5]) > 0.52 &&
+      nd(lm[12], lm[9]) > 0.52;
+
+    // O: Arched fingers with index and middle tips meeting the thumb tip
+    if (fingersArched && thumbIndex < 0.45 && thumbMiddle < 0.52) {
+      return { type: 'LETTER', value: 'O', confidence: 0.91, source: 'local' };
     }
-    if (thumbOut && thumbIndex > 0.95 && nd(lm[8], wrist) > 1.05) {
-      return { type: 'LETTER', value: 'C', confidence: 0.87, source: 'local' };
+
+    // C: Arched fingers with an open C-gap between thumb tip and index tip
+    if (fingersArched && thumbIndex >= 0.45 && thumbIndex < 1.25 && lm[8].y < lm[5].y) {
+      return { type: 'LETTER', value: 'C', confidence: 0.89, source: 'local' };
     }
-    if (thumbOut && thumbUp) {
-      return { type: 'LETTER', value: 'A', confidence: 0.93, source: 'local' };
-    }
-    if (lm[4].y > lm[8].y && lm[4].y > lm[12].y && thumbMiddle < 0.72) {
+
+    // E: All 4 fingertips curled above the horizontal thumb across the palm
+    const tipsAboveThumb =
+      lm[8].y < lm[4].y - palm * 0.05 &&
+      lm[12].y < lm[4].y - palm * 0.05 &&
+      lm[16].y < lm[4].y &&
+      thumbPalmPos > 0.15 &&
+      nd(lm[4], lm[12]) < 0.65;
+    if (tipsAboveThumb) {
       return { type: 'LETTER', value: 'E', confidence: 0.88, source: 'local' };
     }
-    if (nd(lm[4], lm[6]) < 0.48) {
-      return { type: 'LETTER', value: 'T', confidence: 0.86, source: 'local' };
+
+    // A: Thumb rests upright along the outside of the index finger (thumbPalmPos < 0.12)
+    if (thumbPalmPos < 0.12 && thumbUp && lm[4].y < lm[6].y + palm * 0.1) {
+      return { type: 'LETTER', value: 'A', confidence: 0.94, source: 'local' };
     }
-    if (nd(lm[4], lm[10]) < 0.48) {
-      return { type: 'LETTER', value: 'N', confidence: 0.86, source: 'local' };
+
+    // T, N, M: Thumb tip tucked between knuckles (measured along palm axis 0.0 -> 1.0)
+    const thumbTuckedHigh = lm[4].y < lm[8].y && lm[4].y < lm[12].y;
+    if (thumbTuckedHigh) {
+      if (thumbPalmPos >= 0.08 && thumbPalmPos < 0.36 && nd(lm[4], lm[6]) < 0.46) {
+        return { type: 'LETTER', value: 'T', confidence: 0.88, source: 'local' };
+      }
+      if (thumbPalmPos >= 0.36 && thumbPalmPos < 0.64 && nd(lm[4], lm[10]) < 0.46) {
+        return { type: 'LETTER', value: 'N', confidence: 0.88, source: 'local' };
+      }
+      if (thumbPalmPos >= 0.64 && (nd(lm[4], lm[14]) < 0.5 || nd(lm[4], lm[18]) < 0.55)) {
+        return { type: 'LETTER', value: 'M', confidence: 0.88, source: 'local' };
+      }
     }
-    if (nd(lm[4], lm[14]) < 0.55 || nd(lm[4], lm[18]) < 0.6) {
-      return { type: 'LETTER', value: 'M', confidence: 0.86, source: 'local' };
-    }
-    return { type: 'LETTER', value: 'S', confidence: 0.88, source: 'local' };
+
+    // S: Clenched fist with thumb crossed horizontally in front of the curled fingers
+    return { type: 'LETTER', value: 'S', confidence: 0.9, source: 'local' };
   }
 
   return { type: 'UNKNOWN', value: '', confidence: 0.2, source: 'local' };
 }
 
-// Emits a steady 280ms window after a 450ms hold so your UI registers every letter once
+// 7-Frame Majority-Vote Filter so brief finger movement never triggers a wrong letter
+function smoothPrediction(raw: VisionResult): VisionResult {
+  recentPredictions.push(raw);
+  if (recentPredictions.length > 7) {
+    recentPredictions.shift();
+  }
+
+  const counts = new Map<string, { count: number; sample: VisionResult }>();
+  for (const item of recentPredictions) {
+    if (item.type === 'UNKNOWN' || !item.value) continue;
+    const prev = counts.get(item.value);
+    if (prev) {
+      prev.count++;
+    } else {
+      counts.set(item.value, { count: 1, sample: item });
+    }
+  }
+
+  let bestSign = '';
+  let bestCount = 0;
+  let bestSample: VisionResult = { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
+
+  for (const [sign, data] of counts.entries()) {
+    if (data.count > bestCount) {
+      bestSign = sign;
+      bestCount = data.count;
+      bestSample = data.sample;
+    }
+  }
+
+  // Require at least 4 out of the last 7 frames to agree on the exact same sign
+  if (bestSign && bestCount >= 4) {
+    return bestSample;
+  }
+  return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
+}
+
 function stabilizeAndGate(raw: VisionResult): VisionResult {
+  const smoothed = smoothPrediction(raw);
   const now = Date.now();
   const empty: VisionResult = { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
 
-  if (raw.type === 'UNKNOWN' || !raw.value) {
+  if (smoothed.type === 'UNKNOWN' || !smoothed.value) {
     mismatchFrames++;
     if (mismatchFrames > 3) {
       candidateSign = '';
@@ -361,39 +463,32 @@ function stabilizeAndGate(raw: VisionResult): VisionResult {
     return empty;
   }
 
-  if (raw.value !== candidateSign) {
-    mismatchFrames++;
-    if (mismatchFrames > 2 || !candidateSign) {
-      candidateSign = raw.value;
-      candidateStartTime = now;
-      mismatchFrames = 0;
-    }
+  if (smoothed.value !== candidateSign) {
+    candidateSign = smoothed.value;
+    candidateStartTime = now;
+    mismatchFrames = 0;
     return empty;
   }
 
   mismatchFrames = 0;
   const elapsed = now - candidateStartTime;
 
-  // 1. Wait 450ms while user forms the sign
   if (elapsed < HOLD_DELAY_MS) {
     return empty;
   }
 
-  // 2. Emit sign for 280ms so the UI hook captures it cleanly once
   if (elapsed <= HOLD_DELAY_MS + EMIT_WINDOW_MS) {
-    if (raw.value === 'CLEAR') triggerInputAction('CLEAR');
-    if (raw.value === 'SEND') triggerInputAction('SEND');
-    return raw;
+    if (smoothed.value === 'CLEAR') triggerInputAction('CLEAR');
+    if (smoothed.value === 'SEND') triggerInputAction('SEND');
+    return smoothed;
   }
 
-  // 3. Cooldown pause (1.8s) so holding the same sign doesn't type "AAAA..."
   if (elapsed < HOLD_DELAY_MS + EMIT_WINDOW_MS + REPEAT_COOLDOWN_MS) {
     return empty;
   }
 
-  // Reset timer if user intentionally holds for >2.5 seconds to repeat a letter
   candidateStartTime = now - HOLD_DELAY_MS;
-  return raw;
+  return smoothed;
 }
 
 export async function localVision(video: HTMLVideoElement, timestamp: number): Promise<VisionResult> {
@@ -413,13 +508,15 @@ export async function localVision(video: HTMLVideoElement, timestamp: number): P
 
     if (hands.length === 0) {
       mismatchFrames++;
-      if (mismatchFrames > 3) candidateSign = '';
+      if (mismatchFrames > 3) {
+        candidateSign = '';
+        recentPredictions.length = 0;
+      }
       updateMouselessCursor(false);
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // TOGGLE MOUSELESS MODE: Triggers on EITHER the 2nd Image (Two Stacked Horizontal Hands)
-    // OR Two-Hand Middle Finger Gesture
+    // TOGGLE MOUSELESS MODE: Two Stacked Horizontal Hands OR Two-Hand Middle Finger Gesture
     if (
       hands.length >= 2 &&
       (isTwoStackedHorizontalHands(hands[0], hands[1]) ||
