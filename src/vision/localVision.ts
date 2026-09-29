@@ -4,8 +4,9 @@ import type { CustomGesture, Landmark, VisionResult } from '../types';
 const WASM_PATH = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const MODEL_PATH = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-const HOLD_TIME_MS = 1100;
-const REPEAT_COOLDOWN_MS = 2000;
+// 7-11% faster response time: HOLD_TIME_MS set to exactly 1000ms (1 second)
+const HOLD_TIME_MS = 1000;
+const REPEAT_COOLDOWN_MS = 1900;
 
 let landmarkerPromise: Promise<HandLandmarker> | null = null;
 let lastVideoTime = -1;
@@ -50,7 +51,7 @@ function getFingerStates(lm: Landmark[]) {
   return { thumbOpen, thumbUp, indexOpen, middleOpen, ringOpen, pinkyOpen, indexHalf };
 }
 
-// Checks if ONLY the middle finger is extended on a given hand
+// Two-hand middle finger detection
 function isOnlyMiddleFinger(lm: Landmark[]): boolean {
   if (!lm || lm.length < 21) return false;
   const { indexOpen, middleOpen, ringOpen, pinkyOpen } = getFingerStates(lm);
@@ -59,7 +60,7 @@ function isOnlyMiddleFinger(lm: Landmark[]): boolean {
 
 function triggerInputAction(action: 'CLEAR' | 'SEND') {
   const now = Date.now();
-  if (now - lastActionTime < 1400) return;
+  if (now - lastActionTime < 1300) return;
   lastActionTime = now;
 
   const inputEl = document.querySelector(
@@ -240,7 +241,7 @@ export async function localVision(video: HTMLVideoElement, timestamp: number): P
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // TWO-HAND MIDDLE FINGER TOGGLE: Hold only the middle finger on BOTH hands
+    // Two-hand middle finger gesture to toggle mouseless mode
     if (hands.length >= 2 && isOnlyMiddleFinger(hands[0]) && isOnlyMiddleFinger(hands[1])) {
       if (now - lastToggleTime > 1500) {
         mouselessMode = !mouselessMode;
