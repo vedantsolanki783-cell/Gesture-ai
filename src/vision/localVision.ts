@@ -18,8 +18,9 @@ let lastToggleTime = 0;
 let lastClickTime = 0;
 let lastScrollTime = 0;
 let lastActionTime = 0;
+let activeVideoEl: HTMLVideoElement | null = null;
+let bgIntervalId: any = null;
 
-// Smooth cursor coordinates so the wireless air mouse doesn't jitter
 let smoothNormX = 0.5;
 let smoothNormY = 0.5;
 
@@ -30,6 +31,16 @@ let mismatchFrames = 0;
 const recentPredictions: VisionResult[] = [];
 const indexTrail: { x: number; y: number; t: number }[] = [];
 const pinkyTrail: { x: number; y: number; t: number }[] = [];
+
+// Background heartbeat so hand tracking continues when minimized in PiP / Pop-up view
+function ensureBackgroundVisionLoop() {
+  if (bgIntervalId) return;
+  bgIntervalId = setInterval(() => {
+    if (activeVideoEl && (document.hidden || mouselessMode)) {
+      localVision(activeVideoEl, performance.now()).catch(() => {});
+    }
+  }, 65);
+}
 
 async function getLandmarker(): Promise<HandLandmarker> {
   if (!landmarkerPromise) {
@@ -46,12 +57,11 @@ async function getLandmarker(): Promise<HandLandmarker> {
           baseOptions: { modelAssetPath: MODEL_PATH, delegate: preferredDelegate },
           runningMode: 'VIDEO',
           numHands: 2,
-          minHandDetectionConfidence: 0.38,
-          minHandPresenceConfidence: 0.38,
-          minTrackingConfidence: 0.38
+          minHandDetectionConfidence: 0.35,
+          minHandPresenceConfidence: 0.35,
+          minTrackingConfidence: 0.35
         });
-      } catch (err) {
-        console.warn('Primary delegate failed, switching to CPU fallback:', err);
+      } catch {
         return await HandLandmarker.createFromOptions(vision, {
           baseOptions: { modelAssetPath: MODEL_PATH, delegate: 'CPU' },
           runningMode: 'VIDEO',
@@ -133,6 +143,11 @@ function isOnlyMiddleFinger(lm: Landmark[]): boolean {
 }
 
 function showModeNotification(isMouseless: boolean) {
+  const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
+  if (isMouseless && bridge && typeof bridge.enableOverlayBubble === 'function') {
+    try { bridge.enableOverlayBubble(); } catch {}
+  }
+
   let badge = document.getElementById('nova-mode-badge');
   if (!badge) {
     badge = document.createElement('div');
@@ -156,25 +171,23 @@ function showModeNotification(isMouseless: boolean) {
   }
   badge.style.background = isMouseless ? '#dc2626' : '#10b981';
   badge.textContent = isMouseless
-    ? '🖱️ System Wireless Mouse ON (Point to move, Pinch to click any app)'
+    ? '🖱️ System Wireless Mouse ON (Tap 🪟 Mini PiP to use over all apps!)'
     : '✋ ASL Sign Mode ON (26 Letters A–Z)';
   badge.style.opacity = '1';
   setTimeout(() => {
     if (badge && !mouselessMode) badge.style.opacity = '0';
-  }, 2200);
+  }, 2500);
 }
 
 function updateMouselessCursor(visible: boolean, normX = 0.5, normY = 0.5, pinching = false) {
   const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
 
-  // 1. Update Native Android System-Wide Overlay Cursor (works over Home Screen & other apps!)
   if (bridge && typeof bridge.updateAirMouse === 'function') {
     try {
       bridge.updateAirMouse(visible, normX, normY, pinching);
     } catch {}
   }
 
-  // 2. Also update in-app HTML cursor fallback
   let cursor = document.getElementById('nova-mouseless-cursor');
   if (!visible) {
     if (cursor) cursor.style.display = 'none';
@@ -481,6 +494,9 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
+    activeVideoEl = video;
+    ensureBackgroundVisionLoop();
+
     video.playsInline = true;
     video.muted = true;
     if (video.paused && video.srcObject) {
@@ -528,26 +544,28 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       const indexTip = hands[0][8];
       const thumbTip = hands[0][4];
 
-      // Smooth coordinates so the wireless mouse pointer glides smoothly across the tablet screen
-      const targetX = Math.max(0, Math.min(1, 1 - indexTip.x));
-      const targetY = Math.max(0, Math.min(1, indexTip.y));
-      smoothNormX = smoothNormX * 0.55 + targetX * 0.45;
-      smoothNormY = smoothNormY * 0.55 + targetY * 0.45;
+      // Expand range slightly so you don't have to reach the extreme edge of the camera to hit screen corners
+      const rawX = (1 - indexTip.x - 0.12) / 0.76;
+      const rawY = (indexTip.y - 0.12) / 0.76;
+      const targetX = Math.max(0.01, Math.min(0.99, rawX));
+      const targetY = Math.max(0.01, Math.min(0.99, rawY));
 
-      const pinching = d(indexTip, thumbTip) < 0.058;
+      smoothNormX = smoothNormX * 0.5 + targetX * 0.5;
+      smoothNormY = smoothNormY * 0.5 + targetY * 0.5;
+
+      const pinching = d(indexTip, thumbTip) < 0.062;
 
       updateMouselessCursor(true, smoothNormX, smoothNormY, pinching);
 
       const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
 
-      // Edge Auto-Scrolling (both inside web app and system-wide via Ultron)
-      if (smoothNormY < 0.15) {
+      if (smoothNormY < 0.12) {
         window.scrollBy({ top: -15, behavior: 'auto' });
         if (bridge && now - lastScrollTime > 900) {
           lastScrollTime = now;
           try { bridge.swipeScreen(500, 450, 500, 1250, 260); } catch {}
         }
-      } else if (smoothNormY > 0.85) {
+      } else if (smoothNormY > 0.88) {
         window.scrollBy({ top: 15, behavior: 'auto' });
         if (bridge && now - lastScrollTime > 900) {
           lastScrollTime = now;
@@ -555,8 +573,7 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
         }
       }
 
-      // Pinch-to-Click (clicks both inside web app AND physical Android screen via Ultron)
-      if (pinching && now - lastClickTime > 700) {
+      if (pinching && now - lastClickTime > 680) {
         lastClickTime = now;
         if (bridge && typeof bridge.clickAirMouse === 'function') {
           try { bridge.clickAirMouse(smoothNormX, smoothNormY); } catch {}
