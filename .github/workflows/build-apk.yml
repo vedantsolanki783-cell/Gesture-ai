@@ -91,7 +91,9 @@ jobs:
               protected void onServiceConnected() {
                   super.onServiceConnected();
                   instance = this;
-                  Toast.makeText(this, "NOVA Ultron Autonomous Control Online", Toast.LENGTH_SHORT).show();
+                  try {
+                      Toast.makeText(this, "NOVA Ultron Autonomous Control Online", Toast.LENGTH_SHORT).show();
+                  } catch (Throwable ignored) {}
               }
 
               @Override
@@ -108,50 +110,62 @@ jobs:
 
               public boolean tapPoint(float x, float y) {
                   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
-                  Path path = new Path();
-                  path.moveTo(x, y);
-                  GestureDescription.Builder builder = new GestureDescription.Builder();
-                  builder.addStroke(new GestureDescription.StrokeDescription(path, 0, 80));
-                  return dispatchGesture(builder.build(), null, null);
+                  try {
+                      Path path = new Path();
+                      path.moveTo(x, y);
+                      GestureDescription.Builder builder = new GestureDescription.Builder();
+                      builder.addStroke(new GestureDescription.StrokeDescription(path, 0, 80));
+                      return dispatchGesture(builder.build(), null, null);
+                  } catch (Throwable t) {
+                      return false;
+                  }
               }
 
               public boolean swipePath(float x1, float y1, float x2, float y2, long durationMs) {
                   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
-                  Path path = new Path();
-                  path.moveTo(x1, y1);
-                  path.lineTo(x2, y2);
-                  GestureDescription.Builder builder = new GestureDescription.Builder();
-                  builder.addStroke(new GestureDescription.StrokeDescription(path, 0, Math.max(120, durationMs)));
-                  return dispatchGesture(builder.build(), null, null);
+                  try {
+                      Path path = new Path();
+                      path.moveTo(x1, y1);
+                      path.lineTo(x2, y2);
+                      GestureDescription.Builder builder = new GestureDescription.Builder();
+                      builder.addStroke(new GestureDescription.StrokeDescription(path, 0, Math.max(120, durationMs)));
+                      return dispatchGesture(builder.build(), null, null);
+                  } catch (Throwable t) {
+                      return false;
+                  }
               }
 
               public boolean runGlobal(String cmd) {
                   if (cmd == null) return false;
-                  String c = cmd.toUpperCase().trim();
-                  switch (c) {
-                      case "HOME":
-                          return performGlobalAction(GLOBAL_ACTION_HOME);
-                      case "BACK":
-                          return performGlobalAction(GLOBAL_ACTION_BACK);
-                      case "RECENTS":
-                          return performGlobalAction(GLOBAL_ACTION_RECENTS);
-                      case "NOTIFICATIONS":
-                          return performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
-                      case "QUICK_SETTINGS":
-                          return performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
-                      case "SCREENSHOT":
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                              return performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT);
-                          }
-                          return false;
-                      default:
-                          return false;
+                  try {
+                      String c = cmd.toUpperCase().trim();
+                      switch (c) {
+                          case "HOME":
+                              return performGlobalAction(GLOBAL_ACTION_HOME);
+                          case "BACK":
+                              return performGlobalAction(GLOBAL_ACTION_BACK);
+                          case "RECENTS":
+                              return performGlobalAction(GLOBAL_ACTION_RECENTS);
+                          case "NOTIFICATIONS":
+                              return performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
+                          case "QUICK_SETTINGS":
+                              return performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
+                          case "SCREENSHOT":
+                              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                  return performGlobalAction(GLOBAL_ACTION_TAKE_SCREENSHOT);
+                              }
+                              return false;
+                          default:
+                              return false;
+                      }
+                  } catch (Throwable t) {
+                      return false;
                   }
               }
           }
           EOF
 
-      - name: 8. Create Interactive JarvisOverlayService.java (Floating Arc-Reactor + Mini Command HUD)
+      - name: 8. Create Crash-Proof JarvisOverlayService.java
         run: |
           cat << 'EOF' > android/app/src/main/java/com/nova/jarvis/JarvisOverlayService.java
           package com.nova.jarvis;
@@ -162,6 +176,7 @@ jobs:
           import android.app.PendingIntent;
           import android.app.Service;
           import android.content.Intent;
+          import android.content.pm.ServiceInfo;
           import android.graphics.Color;
           import android.graphics.PixelFormat;
           import android.graphics.drawable.GradientDrawable;
@@ -189,36 +204,44 @@ jobs:
               @Override
               public void onCreate() {
                   super.onCreate();
-                  startJarvisForegroundNotification();
-                  showFloatingReactorHud();
+                  try {
+                      startJarvisForegroundNotification();
+                      showFloatingReactorHud();
+                  } catch (Throwable ignored) {}
               }
 
               private void startJarvisForegroundNotification() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                      NotificationChannel chan = new NotificationChannel(
-                          CHANNEL_ID,
-                          "NOVA Jarvis Background Core",
-                          NotificationManager.IMPORTANCE_LOW
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          NotificationChannel chan = new NotificationChannel(
+                              CHANNEL_ID,
+                              "NOVA Jarvis Background Core",
+                              NotificationManager.IMPORTANCE_LOW
+                          );
+                          NotificationManager nm = getSystemService(NotificationManager.class);
+                          if (nm != null) nm.createNotificationChannel(chan);
+                      }
+                      Intent openIntent = new Intent(this, MainActivity.class);
+                      openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                      PendingIntent pi = PendingIntent.getActivity(
+                          this, 0, openIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
                       );
-                      NotificationManager nm = getSystemService(NotificationManager.class);
-                      if (nm != null) nm.createNotificationChannel(chan);
-                  }
-                  Intent openIntent = new Intent(this, MainActivity.class);
-                  openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                  PendingIntent pi = PendingIntent.getActivity(
-                      this, 0, openIntent,
-                      PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-                  );
 
-                  Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
-                      .setContentTitle("NOVA Jarvis + Ultron Active")
-                      .setContentText("Floating HUD running in background. Tap to open NOVA.")
-                      .setSmallIcon(android.R.drawable.ic_dialog_info)
-                      .setContentIntent(pi)
-                      .setOngoing(true)
-                      .build();
+                      Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
+                          .setContentTitle("NOVA Jarvis + Ultron Active")
+                          .setContentText("Tap to open NOVA.")
+                          .setSmallIcon(android.R.drawable.ic_dialog_info)
+                          .setContentIntent(pi)
+                          .setOngoing(true)
+                          .build();
 
-                  startForeground(1337, notif);
+                      if (Build.VERSION.SDK_INT >= 34) {
+                          startForeground(1337, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                      } else {
+                          startForeground(1337, notif);
+                      }
+                  } catch (Throwable ignored) {}
               }
 
               private int dp(int v) {
@@ -250,164 +273,167 @@ jobs:
               }
 
               private void triggerUltronAction(String action) {
-                  UltronAccessibilityService svc = UltronAccessibilityService.getInstance();
-                  if (svc == null) {
-                      Toast.makeText(this, "Turn ON 'NOVA Ultron Agent Control' in Accessibility Settings!", Toast.LENGTH_LONG).show();
-                      Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-                      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                      startActivity(intent);
-                      return;
-                  }
-                  if ("SWIPE_UP".equals(action)) {
-                      svc.swipePath(500, 1400, 500, 350, 300);
-                  } else if ("SWIPE_DOWN".equals(action)) {
-                      svc.swipePath(500, 350, 500, 1400, 300);
-                  } else {
-                      svc.runGlobal(action);
-                  }
+                  try {
+                      UltronAccessibilityService svc = UltronAccessibilityService.getInstance();
+                      if (svc == null) {
+                          Toast.makeText(this, "Turn ON 'NOVA Ultron Agent Control' in Accessibility Settings!", Toast.LENGTH_LONG).show();
+                          Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+                          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                          startActivity(intent);
+                          return;
+                      }
+                      if ("SWIPE_UP".equals(action)) {
+                          svc.swipePath(500, 1400, 500, 350, 300);
+                      } else if ("SWIPE_DOWN".equals(action)) {
+                          svc.swipePath(500, 350, 500, 1400, 300);
+                      } else {
+                          svc.runGlobal(action);
+                      }
+                  } catch (Throwable ignored) {}
               }
 
               private void showFloatingReactorHud() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                      return;
-                  }
-                  if (rootContainer != null) return;
-
-                  windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-                  rootContainer = new LinearLayout(this);
-                  rootContainer.setOrientation(LinearLayout.HORIZONTAL);
-                  rootContainer.setGravity(Gravity.CENTER_VERTICAL);
-
-                  // 1. Glowing Arc-Reactor Bubble
-                  reactorBubble = new TextView(this);
-                  reactorBubble.setText("⚡");
-                  reactorBubble.setTextSize(22f);
-                  reactorBubble.setTextColor(Color.parseColor("#38bdf8"));
-                  reactorBubble.setGravity(Gravity.CENTER);
-                  reactorBubble.setLayoutParams(new LinearLayout.LayoutParams(dp(58), dp(58)));
-
-                  GradientDrawable shape = new GradientDrawable();
-                  shape.setShape(GradientDrawable.OVAL);
-                  shape.setColor(Color.parseColor("#EE090D16"));
-                  shape.setStroke(dp(3), Color.parseColor("#38bdf8"));
-                  reactorBubble.setBackground(shape);
-
-                  // 2. Expandable Floating Jarvis Command Panel
-                  hudPanel = new LinearLayout(this);
-                  hudPanel.setOrientation(LinearLayout.VERTICAL);
-                  hudPanel.setPadding(dp(10), dp(8), dp(10), dp(8));
-                  hudPanel.setVisibility(View.GONE);
-
-                  GradientDrawable panelBg = new GradientDrawable();
-                  panelBg.setCornerRadius(dp(14));
-                  panelBg.setColor(Color.parseColor("#F2090D16"));
-                  panelBg.setStroke(dp(2), Color.parseColor("#38bdf8"));
-                  hudPanel.setBackground(panelBg);
-
-                  LinearLayout.LayoutParams panelLp = new LinearLayout.LayoutParams(
-                      LinearLayout.LayoutParams.WRAP_CONTENT,
-                      LinearLayout.LayoutParams.WRAP_CONTENT
-                  );
-                  panelLp.setMargins(dp(8), 0, 0, 0);
-                  hudPanel.setLayoutParams(panelLp);
-
-                  // Row 1: Navigation & System Actions
-                  LinearLayout row1 = new LinearLayout(this);
-                  row1.setOrientation(LinearLayout.HORIZONTAL);
-                  row1.addView(createHudButton("🏠 Home", "#1e293b", v -> triggerUltronAction("HOME")));
-                  row1.addView(createHudButton("🔙 Back", "#1e293b", v -> triggerUltronAction("BACK")));
-                  row1.addView(createHudButton("🗂️️ Apps", "#1e293b", v -> triggerUltronAction("RECENTS")));
-                  row1.addView(createHudButton("📸 Shot", "#0284c7", v -> triggerUltronAction("SCREENSHOT")));
-
-                  // Row 2: Scroll & Open Full NOVA App
-                  LinearLayout row2 = new LinearLayout(this);
-                  row2.setOrientation(LinearLayout.HORIZONTAL);
-                  row2.addView(createHudButton("⬆️ Scroll", "#1e293b", v -> triggerUltronAction("SWIPE_UP")));
-                  row2.addView(createHudButton("⬇️ Scroll", "#1e293b", v -> triggerUltronAction("SWIPE_DOWN")));
-                  row2.addView(createHudButton("🤖 Open NOVA", "#10b981", v -> {
-                      toggleHud(false);
-                      Intent i = new Intent(JarvisOverlayService.this, MainActivity.class);
-                      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-                      startActivity(i);
-                  }));
-                  row2.addView(createHudButton("✕", "#ef4444", v -> toggleHud(false)));
-
-                  hudPanel.addView(row1);
-                  hudPanel.addView(row2);
-
-                  rootContainer.addView(reactorBubble);
-                  rootContainer.addView(hudPanel);
-
-                  int layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                      ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                      : WindowManager.LayoutParams.TYPE_PHONE;
-
-                  params = new WindowManager.LayoutParams(
-                      WindowManager.LayoutParams.WRAP_CONTENT,
-                      WindowManager.LayoutParams.WRAP_CONTENT,
-                      layoutType,
-                      WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-                      PixelFormat.TRANSLUCENT
-                  );
-                  params.gravity = Gravity.TOP | Gravity.START;
-                  params.x = 24;
-                  params.y = 240;
-
-                  reactorBubble.setOnTouchListener(new View.OnTouchListener() {
-                      private int initX, initY;
-                      private float touchX, touchY;
-                      private long downTime;
-
-                      @Override
-                      public boolean onTouch(View v, MotionEvent event) {
-                          switch (event.getAction()) {
-                              case MotionEvent.ACTION_DOWN:
-                                  initX = params.x;
-                                  initY = params.y;
-                                  touchX = event.getRawX();
-                                  touchY = event.getRawY();
-                                  downTime = System.currentTimeMillis();
-                                  return true;
-                              case MotionEvent.ACTION_MOVE:
-                                  params.x = initX + (int) (event.getRawX() - touchX);
-                                  params.y = initY + (int) (event.getRawY() - touchY);
-                                  if (windowManager != null && rootContainer != null) {
-                                      windowManager.updateViewLayout(rootContainer, params);
-                                  }
-                                  return true;
-                              case MotionEvent.ACTION_UP:
-                                  long elapsed = System.currentTimeMillis() - downTime;
-                                  float moved = (float) Math.hypot(event.getRawX() - touchX, event.getRawY() - touchY);
-                                  if (moved < 18 && elapsed < 400) {
-                                      // Tap: Toggle the interactive Jarvis Mini-HUD right on screen!
-                                      toggleHud(!isExpanded);
-                                  }
-                                  return true;
-                          }
-                          return false;
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                          return;
                       }
-                  });
+                      if (rootContainer != null) return;
 
-                  if (windowManager != null) {
-                      windowManager.addView(rootContainer, params);
-                  }
+                      windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+                      rootContainer = new LinearLayout(this);
+                      rootContainer.setOrientation(LinearLayout.HORIZONTAL);
+                      rootContainer.setGravity(Gravity.CENTER_VERTICAL);
+
+                      reactorBubble = new TextView(this);
+                      reactorBubble.setText("⚡");
+                      reactorBubble.setTextSize(22f);
+                      reactorBubble.setTextColor(Color.parseColor("#38bdf8"));
+                      reactorBubble.setGravity(Gravity.CENTER);
+                      reactorBubble.setLayoutParams(new LinearLayout.LayoutParams(dp(58), dp(58)));
+
+                      GradientDrawable shape = new GradientDrawable();
+                      shape.setShape(GradientDrawable.OVAL);
+                      shape.setColor(Color.parseColor("#EE090D16"));
+                      shape.setStroke(dp(3), Color.parseColor("#38bdf8"));
+                      reactorBubble.setBackground(shape);
+
+                      hudPanel = new LinearLayout(this);
+                      hudPanel.setOrientation(LinearLayout.VERTICAL);
+                      hudPanel.setPadding(dp(10), dp(8), dp(10), dp(8));
+                      hudPanel.setVisibility(View.GONE);
+
+                      GradientDrawable panelBg = new GradientDrawable();
+                      panelBg.setCornerRadius(dp(14));
+                      panelBg.setColor(Color.parseColor("#F2090D16"));
+                      panelBg.setStroke(dp(2), Color.parseColor("#38bdf8"));
+                      hudPanel.setBackground(panelBg);
+
+                      LinearLayout.LayoutParams panelLp = new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.WRAP_CONTENT,
+                          LinearLayout.LayoutParams.WRAP_CONTENT
+                      );
+                      panelLp.setMargins(dp(8), 0, 0, 0);
+                      hudPanel.setLayoutParams(panelLp);
+
+                      LinearLayout row1 = new LinearLayout(this);
+                      row1.setOrientation(LinearLayout.HORIZONTAL);
+                      row1.addView(createHudButton("🏠 Home", "#1e293b", v -> triggerUltronAction("HOME")));
+                      row1.addView(createHudButton("🔙 Back", "#1e293b", v -> triggerUltronAction("BACK")));
+                      row1.addView(createHudButton("🗂 Apps", "#1e293b", v -> triggerUltronAction("RECENTS")));
+                      row1.addView(createHudButton("📸 Shot", "#0284c7", v -> triggerUltronAction("SCREENSHOT")));
+
+                      LinearLayout row2 = new LinearLayout(this);
+                      row2.setOrientation(LinearLayout.HORIZONTAL);
+                      row2.addView(createHudButton("⬆️️ Scroll", "#1e293b", v -> triggerUltronAction("SWIPE_UP")));
+                      row2.addView(createHudButton("⬇️ Scroll", "#1e293b", v -> triggerUltronAction("SWIPE_DOWN")));
+                      row2.addView(createHudButton("🤖 Open NOVA", "#10b981", v -> {
+                          toggleHud(false);
+                          Intent i = new Intent(JarvisOverlayService.this, MainActivity.class);
+                          i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                          startActivity(i);
+                      }));
+                      row2.addView(createHudButton("✕", "#ef4444", v -> toggleHud(false)));
+
+                      hudPanel.addView(row1);
+                      hudPanel.addView(row2);
+
+                      rootContainer.addView(reactorBubble);
+                      rootContainer.addView(hudPanel);
+
+                      int layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                          ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                          : WindowManager.LayoutParams.TYPE_PHONE;
+
+                      params = new WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          layoutType,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                          PixelFormat.TRANSLUCENT
+                      );
+                      params.gravity = Gravity.TOP | Gravity.START;
+                      params.x = 24;
+                      params.y = 240;
+
+                      reactorBubble.setOnTouchListener(new View.OnTouchListener() {
+                          private int initX, initY;
+                          private float touchX, touchY;
+                          private long downTime;
+
+                          @Override
+                          public boolean onTouch(View v, MotionEvent event) {
+                              switch (event.getAction()) {
+                                  case MotionEvent.ACTION_DOWN:
+                                      initX = params.x;
+                                      initY = params.y;
+                                      touchX = event.getRawX();
+                                      touchY = event.getRawY();
+                                      downTime = System.currentTimeMillis();
+                                      return true;
+                                  case MotionEvent.ACTION_MOVE:
+                                      params.x = initX + (int) (event.getRawX() - touchX);
+                                      params.y = initY + (int) (event.getRawY() - touchY);
+                                      if (windowManager != null && rootContainer != null) {
+                                          windowManager.updateViewLayout(rootContainer, params);
+                                      }
+                                      return true;
+                                  case MotionEvent.ACTION_UP:
+                                      long elapsed = System.currentTimeMillis() - downTime;
+                                      float moved = (float) Math.hypot(event.getRawX() - touchX, event.getRawY() - touchY);
+                                      if (moved < 18 && elapsed < 400) {
+                                          toggleHud(!isExpanded);
+                                      }
+                                      return true;
+                              }
+                              return false;
+                          }
+                      });
+
+                      if (windowManager != null) {
+                          windowManager.addView(rootContainer, params);
+                      }
+                  } catch (Throwable ignored) {}
               }
 
               private void toggleHud(boolean expand) {
-                  isExpanded = expand;
-                  if (hudPanel != null) {
-                      hudPanel.setVisibility(expand ? View.VISIBLE : View.GONE);
-                      if (windowManager != null && rootContainer != null) {
-                          windowManager.updateViewLayout(rootContainer, params);
+                  try {
+                      isExpanded = expand;
+                      if (hudPanel != null) {
+                          hudPanel.setVisibility(expand ? View.VISIBLE : View.GONE);
+                          if (windowManager != null && rootContainer != null) {
+                              windowManager.updateViewLayout(rootContainer, params);
+                          }
                       }
-                  }
+                  } catch (Throwable ignored) {}
               }
 
               private void removeBubble() {
-                  if (windowManager != null && rootContainer != null) {
-                      try { windowManager.removeView(rootContainer); } catch (Exception ignored) {}
-                      rootContainer = null;
-                  }
+                  try {
+                      if (windowManager != null && rootContainer != null) {
+                          windowManager.removeView(rootContainer);
+                          rootContainer = null;
+                      }
+                  } catch (Throwable ignored) {}
               }
 
               @Override
@@ -429,7 +455,7 @@ jobs:
           }
           EOF
 
-      - name: 9. Upgrade MainActivity.java with Auto-Overlay Setup & Camera WebRTC Fix
+      - name: 9. Upgrade MainActivity.java with Safe Crash-Proof Lifecycle
         run: |
           cat << 'EOF' > android/app/src/main/java/com/nova/jarvis/MainActivity.java
           package com.nova.jarvis;
@@ -448,7 +474,6 @@ jobs:
           import android.webkit.PermissionRequest;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
-          import android.widget.Toast;
           import androidx.core.app.ActivityCompat;
           import androidx.core.content.ContextCompat;
           import com.getcapacitor.BridgeActivity;
@@ -458,109 +483,92 @@ jobs:
 
           public class MainActivity extends BridgeActivity {
               private PowerManager.WakeLock wakeLock;
-              private static boolean promptedOverlayOnce = false;
 
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
 
-                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                  try {
+                      getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                  } catch (Throwable ignored) {}
 
-                  PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-                  if (pm != null) {
-                      wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NovaJarvis::BackgroundWakeLock");
-                      wakeLock.acquire();
-                  }
-
-                  requestHardwarePermissions();
-                  configureJarvisWebView();
-                  autoEnsureOverlayAndStartService();
-              }
-
-              private void autoEnsureOverlayAndStartService() {
-                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                      if (!promptedOverlayOnce) {
-                          promptedOverlayOnce = true;
-                          Toast.makeText(this, "Turn ON 'NOVA Jarvis AI' here to enable the Floating Jarvis HUD!", Toast.LENGTH_LONG).show();
-                          Intent intent = new Intent(
-                              Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                              Uri.parse("package:" + getPackageName())
-                          );
-                          startActivity(intent);
+                  try {
+                      PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                      if (pm != null) {
+                          wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NovaJarvis::BackgroundWakeLock");
+                          wakeLock.acquire(10 * 60 * 1000L);
                       }
-                      return;
-                  }
-                  startJarvisBackgroundService();
+                  } catch (Throwable ignored) {}
+
+                  try {
+                      requestHardwarePermissions();
+                  } catch (Throwable ignored) {}
+
+                  try {
+                      configureJarvisWebView();
+                  } catch (Throwable ignored) {}
               }
 
               @Override
               public void onResume() {
                   super.onResume();
                   attachCameraWebChromeClient();
-                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
-                      startJarvisBackgroundService();
-                  }
-              }
-
-              private void startJarvisBackgroundService() {
-                  try {
-                      Intent serviceIntent = new Intent(this, JarvisOverlayService.class);
-                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                          startForegroundService(serviceIntent);
-                      } else {
-                          startService(serviceIntent);
-                      }
-                  } catch (Exception ignored) {}
               }
 
               private void requestHardwarePermissions() {
-                  List<String> perms = new ArrayList<>();
-                  perms.add(Manifest.permission.CAMERA);
-                  perms.add(Manifest.permission.RECORD_AUDIO);
-                  perms.add(Manifest.permission.MODIFY_AUDIO_SETTINGS);
-                  if (Build.VERSION.SDK_INT >= 33) {
-                      perms.add("android.permission.POST_NOTIFICATIONS");
-                  }
-                  List<String> needed = new ArrayList<>();
-                  for (String p : perms) {
-                      if (ContextCompat.checkSelfPermission(this, p) != PackageManager.PERMISSION_GRANTED) {
-                          needed.add(p);
+                  try {
+                      List<String> perms = new ArrayList<>();
+                      perms.add(Manifest.permission.CAMERA);
+                      perms.add(Manifest.permission.RECORD_AUDIO);
+                      perms.add(Manifest.permission.MODIFY_AUDIO_SETTINGS);
+                      if (Build.VERSION.SDK_INT >= 33) {
+                          perms.add("android.permission.POST_NOTIFICATIONS");
                       }
-                  }
-                  if (!needed.isEmpty()) {
-                      ActivityCompat.requestPermissions(this, needed.toArray(new String[0]), 1001);
-                  }
+                      List<String> needed = new ArrayList<>();
+                      for (String p : perms) {
+                          if (ContextCompat.checkSelfPermission(this, p) != PackageManager.PERMISSION_GRANTED) {
+                              needed.add(p);
+                          }
+                      }
+                      if (!needed.isEmpty()) {
+                          ActivityCompat.requestPermissions(this, needed.toArray(new String[0]), 1001);
+                      }
+                  } catch (Throwable ignored) {}
               }
 
               private void attachCameraWebChromeClient() {
-                  if (this.bridge == null || this.bridge.getWebView() == null) return;
-                  WebView webView = this.bridge.getWebView();
-                  webView.setWebChromeClient(new BridgeWebChromeClient(this.bridge) {
-                      @Override
-                      public void onPermissionRequest(final PermissionRequest request) {
-                          runOnUiThread(() -> {
-                              try {
-                                  request.grant(request.getResources());
-                              } catch (Exception ignored) {}
-                          });
-                      }
-                  });
+                  try {
+                      if (this.bridge == null || this.bridge.getWebView() == null) return;
+                      WebView webView = this.bridge.getWebView();
+                      webView.setWebChromeClient(new BridgeWebChromeClient(this.bridge) {
+                          @Override
+                          public void onPermissionRequest(final PermissionRequest request) {
+                              runOnUiThread(() -> {
+                                  try {
+                                      request.grant(request.getResources());
+                                  } catch (Throwable ignored) {}
+                              });
+                          }
+                      });
+                  } catch (Throwable ignored) {}
               }
 
               private void configureJarvisWebView() {
-                  if (this.bridge == null || this.bridge.getWebView() == null) return;
-                  WebView webView = this.bridge.getWebView();
-                  WebSettings settings = webView.getSettings();
-                  settings.setJavaScriptEnabled(true);
-                  settings.setDomStorageEnabled(true);
-                  settings.setDatabaseEnabled(true);
-                  settings.setMediaPlaybackRequiresUserGesture(false);
-                  settings.setAllowFileAccess(true);
-                  settings.setAllowContentAccess(true);
-                  settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+                  try {
+                      if (this.bridge == null || this.bridge.getWebView() == null) return;
+                      WebView webView = this.bridge.getWebView();
+                      WebSettings settings = webView.getSettings();
+                      settings.setJavaScriptEnabled(true);
+                      settings.setDomStorageEnabled(true);
+                      settings.setDatabaseEnabled(true);
+                      settings.setMediaPlaybackRequiresUserGesture(false);
+                      settings.setAllowFileAccess(true);
+                      settings.setAllowContentAccess(true);
+                      settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
 
-                  webView.addJavascriptInterface(new NovaNativeBridge(), "NovaAndroid");
-                  attachCameraWebChromeClient();
+                      webView.addJavascriptInterface(new NovaNativeBridge(), "NovaAndroid");
+                      attachCameraWebChromeClient();
+                  } catch (Throwable ignored) {}
               }
 
               public class NovaNativeBridge {
@@ -571,25 +579,38 @@ jobs:
 
                   @JavascriptInterface
                   public String enableOverlayBubble() {
-                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(MainActivity.this)) {
-                          Intent intent = new Intent(
-                              Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                              Uri.parse("package:" + getPackageName())
-                          );
-                          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                          startActivity(intent);
-                          return "OPENED_OVERLAY_SETTINGS";
+                      try {
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(MainActivity.this)) {
+                              Intent intent = new Intent(
+                                  Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                  Uri.parse("package:" + getPackageName())
+                              );
+                              intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                              startActivity(intent);
+                              return "OPENED_OVERLAY_SETTINGS";
+                          }
+                          Intent serviceIntent = new Intent(MainActivity.this, JarvisOverlayService.class);
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              startForegroundService(serviceIntent);
+                          } else {
+                              startService(serviceIntent);
+                          }
+                          return "OVERLAY_ACTIVE";
+                      } catch (Throwable t) {
+                          return "ERROR";
                       }
-                      startJarvisBackgroundService();
-                      return "OVERLAY_ACTIVE";
                   }
 
                   @JavascriptInterface
                   public String openAccessibilitySettings() {
-                      Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-                      intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                      startActivity(intent);
-                      return "OPENED_ACCESSIBILITY_SETTINGS";
+                      try {
+                          Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+                          intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                          startActivity(intent);
+                          return "OPENED_ACCESSIBILITY_SETTINGS";
+                      } catch (Throwable t) {
+                          return "ERROR";
+                      }
                   }
 
                   @JavascriptInterface
@@ -647,7 +668,7 @@ jobs:
                               startActivity(launch);
                               return true;
                           }
-                      } catch (Exception ignored) {}
+                      } catch (Throwable ignored) {}
                       return false;
                   }
               }
@@ -655,23 +676,27 @@ jobs:
               @Override
               public void onPause() {
                   super.onPause();
-                  if (this.bridge != null && this.bridge.getWebView() != null) {
-                      this.bridge.getWebView().onResume();
-                      this.bridge.getWebView().resumeTimers();
-                  }
+                  try {
+                      if (this.bridge != null && this.bridge.getWebView() != null) {
+                          this.bridge.getWebView().onResume();
+                          this.bridge.getWebView().resumeTimers();
+                      }
+                  } catch (Throwable ignored) {}
               }
 
               @Override
               public void onDestroy() {
-                  if (wakeLock != null && wakeLock.isHeld()) {
-                      wakeLock.release();
-                  }
+                  try {
+                      if (wakeLock != null && wakeLock.isHeld()) {
+                          wakeLock.release();
+                      }
+                  } catch (Throwable ignored) {}
                   super.onDestroy();
               }
           }
           EOF
 
-      - name: 10. Register Camera Features & Foreground Service Types in AndroidManifest.xml
+      - name: 10. Register Foreground Service Types & Permissions in AndroidManifest.xml
         run: |
           python3 - << 'EOF'
           with open("android/app/src/main/AndroidManifest.xml", "r") as f:
@@ -685,6 +710,7 @@ jobs:
               <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
               <uses-permission android:name="android.permission.WAKE_LOCK" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
               <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
               <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
@@ -698,7 +724,12 @@ jobs:
                   <service
                       android:name=".JarvisOverlayService"
                       android:enabled="true"
-                      android:exported="false" />
+                      android:exported="false"
+                      android:foregroundServiceType="specialUse">
+                      <property
+                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="Floating AI Assistant overlay" />
+                  </service>
 
                   <service
                       android:name=".UltronAccessibilityService"
