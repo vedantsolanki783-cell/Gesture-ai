@@ -16,7 +16,12 @@ let lastVideoTime = -1;
 let mouselessMode = false;
 let lastToggleTime = 0;
 let lastClickTime = 0;
+let lastScrollTime = 0;
 let lastActionTime = 0;
+
+// Smooth cursor coordinates so the wireless air mouse doesn't jitter
+let smoothNormX = 0.5;
+let smoothNormY = 0.5;
 
 let candidateSign = '';
 let candidateStartTime = 0;
@@ -26,7 +31,6 @@ const recentPredictions: VisionResult[] = [];
 const indexTrail: { x: number; y: number; t: number }[] = [];
 const pinkyTrail: { x: number; y: number; t: number }[] = [];
 
-// Initializes MediaPipe with automatic CPU fallback so Android APK WebView never fails
 async function getLandmarker(): Promise<HandLandmarker> {
   if (!landmarkerPromise) {
     landmarkerPromise = (async () => {
@@ -35,7 +39,6 @@ async function getLandmarker(): Promise<HandLandmarker> {
         typeof window !== 'undefined' &&
         (Boolean((window as any).NovaAndroid) || /wv|Android/i.test(navigator.userAgent));
 
-      // On Android WebView, CPU (XNNPACK) is 100% reliable and avoids WebGL2 context crashes
       const preferredDelegate = isAndroidApk ? 'CPU' : 'GPU';
 
       try {
@@ -153,7 +156,7 @@ function showModeNotification(isMouseless: boolean) {
   }
   badge.style.background = isMouseless ? '#dc2626' : '#10b981';
   badge.textContent = isMouseless
-    ? '🖱️ Mouseless Mode ON (Point to move, Pinch to click)'
+    ? '🖱️ System Wireless Mouse ON (Point to move, Pinch to click any app)'
     : '✋ ASL Sign Mode ON (26 Letters A–Z)';
   badge.style.opacity = '1';
   setTimeout(() => {
@@ -161,7 +164,17 @@ function showModeNotification(isMouseless: boolean) {
   }, 2200);
 }
 
-function updateMouselessCursor(visible: boolean, x = 0, y = 0, pinching = false) {
+function updateMouselessCursor(visible: boolean, normX = 0.5, normY = 0.5, pinching = false) {
+  const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
+
+  // 1. Update Native Android System-Wide Overlay Cursor (works over Home Screen & other apps!)
+  if (bridge && typeof bridge.updateAirMouse === 'function') {
+    try {
+      bridge.updateAirMouse(visible, normX, normY, pinching);
+    } catch {}
+  }
+
+  // 2. Also update in-app HTML cursor fallback
   let cursor = document.getElementById('nova-mouseless-cursor');
   if (!visible) {
     if (cursor) cursor.style.display = 'none';
@@ -184,6 +197,8 @@ function updateMouselessCursor(visible: boolean, x = 0, y = 0, pinching = false)
     });
     document.body.appendChild(cursor);
   }
+  const x = normX * window.innerWidth;
+  const y = normY * window.innerHeight;
   cursor.style.display = 'block';
   cursor.style.left = `${x - 12}px`;
   cursor.style.top = `${y - 12}px`;
@@ -262,19 +277,16 @@ function classifyRaw(lm: Landmark[]): VisionResult {
 
   const allFingersClosed = !indexUp && !middleUp && !ringUp && !pinkyUp;
 
-  // 1. Thumbs Down (CLEAR)
   const thumbPointingDown =
     lm[4].y > lm[3].y && lm[4].y > lm[5].y + palm * 0.3 && lm[4].y > wrist.y + palm * 0.32;
   if (thumbPointingDown && allFingersClosed && !indexExt) {
     return { type: 'GESTURE', value: 'CLEAR', confidence: 0.96, source: 'local' };
   }
 
-  // 2. Yo-Yo Sign (SEND)
   if (indexUp && !middleUp && !ringUp && pinkyUp) {
     return { type: 'GESTURE', value: 'SEND', confidence: 0.96, source: 'local' };
   }
 
-  // 3. Q, P, H, G
   if (lm[8].y > lm[5].y + palm * 0.3 && lm[4].y > lm[2].y + palm * 0.18 && !middleUp && !ringUp && !pinkyUp) {
     return { type: 'LETTER', value: 'Q', confidence: 0.9, source: 'local' };
   }
@@ -289,12 +301,10 @@ function classifyRaw(lm: Landmark[]): VisionResult {
     return { type: 'LETTER', value: 'G', confidence: 0.9, source: 'local' };
   }
 
-  // 4. B
   if (indexUp && middleUp && ringUp && pinkyUp) {
     return { type: 'LETTER', value: 'B', confidence: 0.94, source: 'local' };
   }
 
-  // 5. W & F
   if (indexUp && middleUp && ringUp && !pinkyUp) {
     return { type: 'LETTER', value: 'W', confidence: 0.94, source: 'local' };
   }
@@ -302,7 +312,6 @@ function classifyRaw(lm: Landmark[]): VisionResult {
     return { type: 'LETTER', value: 'F', confidence: 0.93, source: 'local' };
   }
 
-  // 6. Y, J, I
   if (!indexUp && !middleUp && !ringUp && pinkyUp) {
     if (thumbOut) {
       return { type: 'LETTER', value: 'Y', confidence: 0.94, source: 'local' };
@@ -314,7 +323,6 @@ function classifyRaw(lm: Landmark[]): VisionResult {
     return { type: 'LETTER', value: 'I', confidence: 0.93, source: 'local' };
   }
 
-  // 7. R, K, V, U
   if (indexUp && middleUp && !ringUp && !pinkyUp) {
     const tipSpread = nd(lm[8], lm[12]);
     const baseSpread = nd(lm[5], lm[9]);
@@ -336,7 +344,6 @@ function classifyRaw(lm: Landmark[]): VisionResult {
     return { type: 'LETTER', value: 'U', confidence: 0.93, source: 'local' };
   }
 
-  // 8. L, Z, D
   if (indexUp && !middleUp && !ringUp && !pinkyUp) {
     if (thumbOut && nd(lm[4], lm[8]) > 0.9) {
       return { type: 'LETTER', value: 'L', confidence: 0.95, source: 'local' };
@@ -348,7 +355,6 @@ function classifyRaw(lm: Landmark[]): VisionResult {
     return { type: 'LETTER', value: 'D', confidence: 0.92, source: 'local' };
   }
 
-  // 9. X, O, C, E, A, T, N, M, S
   if (allFingersClosed) {
     const thumbIndex = nd(lm[4], lm[8]);
     const thumbMiddle = nd(lm[4], lm[12]);
@@ -475,7 +481,6 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Force Android WebView video stream to play inline
     video.playsInline = true;
     video.muted = true;
     if (video.paused && video.srcObject) {
@@ -522,17 +527,42 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
     if (mouselessMode) {
       const indexTip = hands[0][8];
       const thumbTip = hands[0][4];
-      const cx = (1 - indexTip.x) * window.innerWidth;
-      const cy = indexTip.y * window.innerHeight;
-      const pinching = d(indexTip, thumbTip) < 0.055;
 
-      updateMouselessCursor(true, cx, cy, pinching);
+      // Smooth coordinates so the wireless mouse pointer glides smoothly across the tablet screen
+      const targetX = Math.max(0, Math.min(1, 1 - indexTip.x));
+      const targetY = Math.max(0, Math.min(1, indexTip.y));
+      smoothNormX = smoothNormX * 0.55 + targetX * 0.45;
+      smoothNormY = smoothNormY * 0.55 + targetY * 0.45;
 
-      if (indexTip.y < 0.2) window.scrollBy({ top: -15, behavior: 'auto' });
-      if (indexTip.y > 0.8) window.scrollBy({ top: 15, behavior: 'auto' });
+      const pinching = d(indexTip, thumbTip) < 0.058;
 
-      if (pinching && now - lastClickTime > 750) {
+      updateMouselessCursor(true, smoothNormX, smoothNormY, pinching);
+
+      const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
+
+      // Edge Auto-Scrolling (both inside web app and system-wide via Ultron)
+      if (smoothNormY < 0.15) {
+        window.scrollBy({ top: -15, behavior: 'auto' });
+        if (bridge && now - lastScrollTime > 900) {
+          lastScrollTime = now;
+          try { bridge.swipeScreen(500, 450, 500, 1250, 260); } catch {}
+        }
+      } else if (smoothNormY > 0.85) {
+        window.scrollBy({ top: 15, behavior: 'auto' });
+        if (bridge && now - lastScrollTime > 900) {
+          lastScrollTime = now;
+          try { bridge.swipeScreen(500, 1250, 500, 450, 260); } catch {}
+        }
+      }
+
+      // Pinch-to-Click (clicks both inside web app AND physical Android screen via Ultron)
+      if (pinching && now - lastClickTime > 700) {
         lastClickTime = now;
+        if (bridge && typeof bridge.clickAirMouse === 'function') {
+          try { bridge.clickAirMouse(smoothNormX, smoothNormY); } catch {}
+        }
+        const cx = smoothNormX * window.innerWidth;
+        const cy = smoothNormY * window.innerHeight;
         const el = document.elementFromPoint(cx, cy) as HTMLElement | null;
         if (el) {
           el.click();
