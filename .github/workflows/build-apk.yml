@@ -114,7 +114,7 @@ jobs:
                       Path path = new Path();
                       path.moveTo(Math.max(1f, x), Math.max(1f, y));
                       GestureDescription.Builder builder = new GestureDescription.Builder();
-                      builder.addStroke(new GestureDescription.StrokeDescription(path, 0, 75));
+                      builder.addStroke(new GestureDescription.StrokeDescription(path, 0, 65));
                       return dispatchGesture(builder.build(), null, null);
                   } catch (Throwable t) {
                       return false;
@@ -165,7 +165,7 @@ jobs:
           }
           EOF
 
-      - name: 8. Create JarvisOverlayService.java (With System-Wide Wireless Air Mouse Pointer)
+      - name: 8. Create JarvisOverlayService.java (Click-Through Air Mouse & Floating HUD)
         run: |
           cat << 'EOF' > android/app/src/main/java/com/nova/jarvis/JarvisOverlayService.java
           package com.nova.jarvis;
@@ -179,13 +179,14 @@ jobs:
           import android.content.pm.ServiceInfo;
           import android.graphics.Color;
           import android.graphics.PixelFormat;
+          import android.graphics.Point;
           import android.graphics.drawable.GradientDrawable;
           import android.os.Build;
           import android.os.Handler;
           import android.os.IBinder;
           import android.os.Looper;
           import android.provider.Settings;
-          import android.util.DisplayMetrics;
+          import android.view.Display;
           import android.view.Gravity;
           import android.view.MotionEvent;
           import android.view.View;
@@ -206,10 +207,10 @@ jobs:
               private WindowManager.LayoutParams params;
               private boolean isExpanded = false;
 
-              // System-Wide Wireless Air Mouse Overlay Views
               private View airCursorView;
               private WindowManager.LayoutParams cursorParams;
               private final Handler mainHandler = new Handler(Looper.getMainLooper());
+              private boolean isClicking = false;
 
               public static JarvisOverlayService getInstance() {
                   return instance;
@@ -224,6 +225,20 @@ jobs:
                       showFloatingReactorHud();
                       initAirMouseOverlay();
                   } catch (Throwable ignored) {}
+              }
+
+              private Point getRealScreenSize() {
+                  Point p = new Point(1200, 1920);
+                  try {
+                      if (windowManager == null) {
+                          windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+                      }
+                      if (windowManager != null) {
+                          Display d = windowManager.getDefaultDisplay();
+                          d.getRealSize(p);
+                      }
+                  } catch (Throwable ignored) {}
+                  return p;
               }
 
               private void startJarvisForegroundNotification() {
@@ -287,12 +302,14 @@ jobs:
                           : WindowManager.LayoutParams.TYPE_PHONE;
 
                       cursorParams = new WindowManager.LayoutParams(
-                          dp(26),
-                          dp(26),
+                          dp(28),
+                          dp(28),
                           layoutType,
                           WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                               | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                              | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                              | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                              | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                              | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                           PixelFormat.TRANSLUCENT
                       );
                       cursorParams.gravity = Gravity.TOP | Gravity.START;
@@ -308,6 +325,7 @@ jobs:
               public void updateSystemCursor(final boolean visible, final float normX, final float normY, final boolean pinching) {
                   mainHandler.post(() -> {
                       try {
+                          if (isClicking) return;
                           if (airCursorView == null) {
                               initAirMouseOverlay();
                           }
@@ -320,12 +338,13 @@ jobs:
                               return;
                           }
 
-                          DisplayMetrics dm = getResources().getDisplayMetrics();
-                          int screenX = (int) (normX * dm.widthPixels);
-                          int screenY = (int) (normY * dm.heightPixels);
+                          Point screen = getRealScreenSize();
+                          int screenX = (int) (normX * screen.x);
+                          int screenY = (int) (normY * screen.y);
 
-                          cursorParams.x = Math.max(0, Math.min(dm.widthPixels - dp(26), screenX - dp(13)));
-                          cursorParams.y = Math.max(0, Math.min(dm.heightPixels - dp(26), screenY - dp(13)));
+                          // Offset cursor by 2px so the exact tap point isn't occluded by the center of the view
+                          cursorParams.x = Math.max(0, Math.min(screen.x - dp(28), screenX - dp(14)));
+                          cursorParams.y = Math.max(0, Math.min(screen.y - dp(28), screenY - dp(14)));
 
                           GradientDrawable dot = new GradientDrawable();
                           dot.setShape(GradientDrawable.OVAL);
@@ -338,6 +357,37 @@ jobs:
                           }
                           windowManager.updateViewLayout(airCursorView, cursorParams);
                       } catch (Throwable ignored) {}
+                  });
+              }
+
+              // Temporarily hides overlay cursor for 60ms so Android 13/14 allows physical tap on underlying app!
+              public void performAirClick(final float normX, final float normY) {
+                  mainHandler.post(() -> {
+                      try {
+                          UltronAccessibilityService acc = UltronAccessibilityService.getInstance();
+                          if (acc == null) return;
+                          Point screen = getRealScreenSize();
+                          final float x = normX * screen.x;
+                          final float y = normY * screen.y;
+
+                          isClicking = true;
+                          if (airCursorView != null) {
+                              airCursorView.setVisibility(View.GONE);
+                          }
+                          mainHandler.postDelayed(() -> {
+                              try {
+                                  acc.tapPoint(x, y);
+                              } catch (Throwable ignored) {}
+                              mainHandler.postDelayed(() -> {
+                                  isClicking = false;
+                                  if (airCursorView != null) {
+                                      airCursorView.setVisibility(View.VISIBLE);
+                                  }
+                              }, 80);
+                          }, 35);
+                      } catch (Throwable ignored) {
+                          isClicking = false;
+                      }
                   });
               }
 
@@ -559,7 +609,7 @@ jobs:
           }
           EOF
 
-      - name: 9. Upgrade MainActivity.java with System Air Mouse & Picture-in-Picture Support
+      - name: 9. Upgrade MainActivity.java with Auto-Service Start & Click-Through Bridge
         run: |
           cat << 'EOF' > android/app/src/main/java/com/nova/jarvis/MainActivity.java
           package com.nova.jarvis;
@@ -574,7 +624,6 @@ jobs:
           import android.os.Bundle;
           import android.os.PowerManager;
           import android.provider.Settings;
-          import android.util.DisplayMetrics;
           import android.util.Rational;
           import android.view.WindowManager;
           import android.webkit.JavascriptInterface;
@@ -619,6 +668,24 @@ jobs:
 
                   try {
                       configureJarvisWebView();
+                  } catch (Throwable ignored) {}
+
+                  // Auto-start overlay service if permission is already granted
+                  try {
+                      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
+                          startOverlayServiceInternal();
+                      }
+                  } catch (Throwable ignored) {}
+              }
+
+              private void startOverlayServiceInternal() {
+                  try {
+                      Intent serviceIntent = new Intent(MainActivity.this, JarvisOverlayService.class);
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          startForegroundService(serviceIntent);
+                      } else {
+                          startService(serviceIntent);
+                      }
                   } catch (Throwable ignored) {}
               }
 
@@ -704,21 +771,25 @@ jobs:
                   public void updateAirMouse(boolean visible, float normX, float normY, boolean pinching) {
                       try {
                           JarvisOverlayService svc = JarvisOverlayService.getInstance();
-                          if (svc != null) {
-                              svc.updateSystemCursor(visible, normX, normY, pinching);
+                          if (svc == null) {
+                              if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(MainActivity.this)) {
+                                  startOverlayServiceInternal();
+                              }
+                              return;
                           }
+                          svc.updateSystemCursor(visible, normX, normY, pinching);
                       } catch (Throwable ignored) {}
                   }
 
                   @JavascriptInterface
                   public boolean clickAirMouse(float normX, float normY) {
                       try {
-                          UltronAccessibilityService acc = UltronAccessibilityService.getInstance();
-                          if (acc == null) return false;
-                          DisplayMetrics dm = getResources().getDisplayMetrics();
-                          float x = normX * dm.widthPixels;
-                          float y = normY * dm.heightPixels;
-                          return acc.tapPoint(x, y);
+                          JarvisOverlayService svc = JarvisOverlayService.getInstance();
+                          if (svc != null) {
+                              svc.performAirClick(normX, normY);
+                              return true;
+                          }
+                          return false;
                       } catch (Throwable ignored) {
                           return false;
                       }
@@ -736,12 +807,7 @@ jobs:
                               startActivity(intent);
                               return "OPENED_OVERLAY_SETTINGS";
                           }
-                          Intent serviceIntent = new Intent(MainActivity.this, JarvisOverlayService.class);
-                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                              startForegroundService(serviceIntent);
-                          } else {
-                              startService(serviceIntent);
-                          }
+                          startOverlayServiceInternal();
                           return "OVERLAY_ACTIVE";
                       } catch (Throwable t) {
                           return "ERROR";
