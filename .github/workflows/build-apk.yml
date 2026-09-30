@@ -92,7 +92,7 @@ jobs:
                   super.onServiceConnected();
                   instance = this;
                   try {
-                      Toast.makeText(this, "NOVA Ultron Autonomous Control Online", Toast.LENGTH_SHORT).show();
+                      Toast.makeText(this, "NOVA Ultron Wireless Mouse & Agent Online", Toast.LENGTH_SHORT).show();
                   } catch (Throwable ignored) {}
               }
 
@@ -112,9 +112,9 @@ jobs:
                   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false;
                   try {
                       Path path = new Path();
-                      path.moveTo(x, y);
+                      path.moveTo(Math.max(1f, x), Math.max(1f, y));
                       GestureDescription.Builder builder = new GestureDescription.Builder();
-                      builder.addStroke(new GestureDescription.StrokeDescription(path, 0, 80));
+                      builder.addStroke(new GestureDescription.StrokeDescription(path, 0, 75));
                       return dispatchGesture(builder.build(), null, null);
                   } catch (Throwable t) {
                       return false;
@@ -165,7 +165,7 @@ jobs:
           }
           EOF
 
-      - name: 8. Create Crash-Proof JarvisOverlayService.java
+      - name: 8. Create JarvisOverlayService.java (With System-Wide Wireless Air Mouse Pointer)
         run: |
           cat << 'EOF' > android/app/src/main/java/com/nova/jarvis/JarvisOverlayService.java
           package com.nova.jarvis;
@@ -181,8 +181,11 @@ jobs:
           import android.graphics.PixelFormat;
           import android.graphics.drawable.GradientDrawable;
           import android.os.Build;
+          import android.os.Handler;
           import android.os.IBinder;
+          import android.os.Looper;
           import android.provider.Settings;
+          import android.util.DisplayMetrics;
           import android.view.Gravity;
           import android.view.MotionEvent;
           import android.view.View;
@@ -194,6 +197,8 @@ jobs:
 
           public class JarvisOverlayService extends Service {
               private static final String CHANNEL_ID = "nova_jarvis_bg_channel";
+              private static JarvisOverlayService instance;
+
               private WindowManager windowManager;
               private LinearLayout rootContainer;
               private TextView reactorBubble;
@@ -201,12 +206,23 @@ jobs:
               private WindowManager.LayoutParams params;
               private boolean isExpanded = false;
 
+              // System-Wide Wireless Air Mouse Overlay Views
+              private View airCursorView;
+              private WindowManager.LayoutParams cursorParams;
+              private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+              public static JarvisOverlayService getInstance() {
+                  return instance;
+              }
+
               @Override
               public void onCreate() {
                   super.onCreate();
+                  instance = this;
                   try {
                       startJarvisForegroundNotification();
                       showFloatingReactorHud();
+                      initAirMouseOverlay();
                   } catch (Throwable ignored) {}
               }
 
@@ -229,7 +245,7 @@ jobs:
                       );
 
                       Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
-                          .setContentTitle("NOVA Jarvis + Ultron Active")
+                          .setContentTitle("NOVA Jarvis + Wireless Air Mouse Active")
                           .setContentText("Tap to open NOVA.")
                           .setSmallIcon(android.R.drawable.ic_dialog_info)
                           .setContentIntent(pi)
@@ -246,6 +262,83 @@ jobs:
 
               private int dp(int v) {
                   return (int) (v * getResources().getDisplayMetrics().density);
+              }
+
+              private void initAirMouseOverlay() {
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                          return;
+                      }
+                      if (airCursorView != null) return;
+                      if (windowManager == null) {
+                          windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+                      }
+
+                      airCursorView = new View(this);
+                      GradientDrawable dot = new GradientDrawable();
+                      dot.setShape(GradientDrawable.OVAL);
+                      dot.setColor(Color.parseColor("#DDFF2E4C"));
+                      dot.setStroke(dp(3), Color.WHITE);
+                      airCursorView.setBackground(dot);
+                      airCursorView.setVisibility(View.GONE);
+
+                      int layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                          ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                          : WindowManager.LayoutParams.TYPE_PHONE;
+
+                      cursorParams = new WindowManager.LayoutParams(
+                          dp(26),
+                          dp(26),
+                          layoutType,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                              | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                              | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                          PixelFormat.TRANSLUCENT
+                      );
+                      cursorParams.gravity = Gravity.TOP | Gravity.START;
+                      cursorParams.x = 400;
+                      cursorParams.y = 400;
+
+                      if (windowManager != null) {
+                          windowManager.addView(airCursorView, cursorParams);
+                      }
+                  } catch (Throwable ignored) {}
+              }
+
+              public void updateSystemCursor(final boolean visible, final float normX, final float normY, final boolean pinching) {
+                  mainHandler.post(() -> {
+                      try {
+                          if (airCursorView == null) {
+                              initAirMouseOverlay();
+                          }
+                          if (airCursorView == null || windowManager == null) return;
+
+                          if (!visible) {
+                              if (airCursorView.getVisibility() != View.GONE) {
+                                  airCursorView.setVisibility(View.GONE);
+                              }
+                              return;
+                          }
+
+                          DisplayMetrics dm = getResources().getDisplayMetrics();
+                          int screenX = (int) (normX * dm.widthPixels);
+                          int screenY = (int) (normY * dm.heightPixels);
+
+                          cursorParams.x = Math.max(0, Math.min(dm.widthPixels - dp(26), screenX - dp(13)));
+                          cursorParams.y = Math.max(0, Math.min(dm.heightPixels - dp(26), screenY - dp(13)));
+
+                          GradientDrawable dot = new GradientDrawable();
+                          dot.setShape(GradientDrawable.OVAL);
+                          dot.setColor(pinching ? Color.parseColor("#EE10B981") : Color.parseColor("#DDFF2E4C"));
+                          dot.setStroke(dp(3), Color.WHITE);
+                          airCursorView.setBackground(dot);
+
+                          if (airCursorView.getVisibility() != View.VISIBLE) {
+                              airCursorView.setVisibility(View.VISIBLE);
+                          }
+                          windowManager.updateViewLayout(airCursorView, cursorParams);
+                      } catch (Throwable ignored) {}
+                  });
               }
 
               private TextView createHudButton(String label, String bgColor, View.OnClickListener listener) {
@@ -344,9 +437,14 @@ jobs:
 
                       LinearLayout row2 = new LinearLayout(this);
                       row2.setOrientation(LinearLayout.HORIZONTAL);
-                      row2.addView(createHudButton("⬆️️ Scroll", "#1e293b", v -> triggerUltronAction("SWIPE_UP")));
+                      row2.addView(createHudButton("⬆️ Scroll", "#1e293b", v -> triggerUltronAction("SWIPE_UP")));
                       row2.addView(createHudButton("⬇️ Scroll", "#1e293b", v -> triggerUltronAction("SWIPE_DOWN")));
-                      row2.addView(createHudButton("🤖 Open NOVA", "#10b981", v -> {
+                      row2.addView(createHudButton("🪟 Mini PiP", "#8b5cf6", v -> {
+                          toggleHud(false);
+                          MainActivity act = MainActivity.getInstance();
+                          if (act != null) act.enterMiniPipMode();
+                      }));
+                      row2.addView(createHudButton("🤖 NOVA", "#10b981", v -> {
                           toggleHud(false);
                           Intent i = new Intent(JarvisOverlayService.this, MainActivity.class);
                           i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -433,17 +531,23 @@ jobs:
                           windowManager.removeView(rootContainer);
                           rootContainer = null;
                       }
+                      if (windowManager != null && airCursorView != null) {
+                          windowManager.removeView(airCursorView);
+                          airCursorView = null;
+                      }
                   } catch (Throwable ignored) {}
               }
 
               @Override
               public int onStartCommand(Intent intent, int flags, int startId) {
                   showFloatingReactorHud();
+                  initAirMouseOverlay();
                   return START_STICKY;
               }
 
               @Override
               public void onDestroy() {
+                  instance = null;
                   removeBubble();
                   super.onDestroy();
               }
@@ -455,12 +559,13 @@ jobs:
           }
           EOF
 
-      - name: 9. Upgrade MainActivity.java with Safe Crash-Proof Lifecycle
+      - name: 9. Upgrade MainActivity.java with System Air Mouse & Picture-in-Picture Support
         run: |
           cat << 'EOF' > android/app/src/main/java/com/nova/jarvis/MainActivity.java
           package com.nova.jarvis;
 
           import android.Manifest;
+          import android.app.PictureInPictureParams;
           import android.content.Context;
           import android.content.Intent;
           import android.content.pm.PackageManager;
@@ -469,6 +574,8 @@ jobs:
           import android.os.Bundle;
           import android.os.PowerManager;
           import android.provider.Settings;
+          import android.util.DisplayMetrics;
+          import android.util.Rational;
           import android.view.WindowManager;
           import android.webkit.JavascriptInterface;
           import android.webkit.PermissionRequest;
@@ -482,11 +589,17 @@ jobs:
           import java.util.List;
 
           public class MainActivity extends BridgeActivity {
+              private static MainActivity instance;
               private PowerManager.WakeLock wakeLock;
+
+              public static MainActivity getInstance() {
+                  return instance;
+              }
 
               @Override
               public void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
+                  instance = this;
 
                   try {
                       getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -496,7 +609,7 @@ jobs:
                       PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
                       if (pm != null) {
                           wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NovaJarvis::BackgroundWakeLock");
-                          wakeLock.acquire(10 * 60 * 1000L);
+                          wakeLock.acquire(30 * 60 * 1000L);
                       }
                   } catch (Throwable ignored) {}
 
@@ -506,6 +619,16 @@ jobs:
 
                   try {
                       configureJarvisWebView();
+                  } catch (Throwable ignored) {}
+              }
+
+              public void enterMiniPipMode() {
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          PictureInPictureParams.Builder pipBuilder = new PictureInPictureParams.Builder();
+                          pipBuilder.setAspectRatio(new Rational(4, 3));
+                          enterPictureInPictureMode(pipBuilder.build());
+                      }
                   } catch (Throwable ignored) {}
               }
 
@@ -575,6 +698,30 @@ jobs:
                   @JavascriptInterface
                   public boolean isAndroidApp() {
                       return true;
+                  }
+
+                  @JavascriptInterface
+                  public void updateAirMouse(boolean visible, float normX, float normY, boolean pinching) {
+                      try {
+                          JarvisOverlayService svc = JarvisOverlayService.getInstance();
+                          if (svc != null) {
+                              svc.updateSystemCursor(visible, normX, normY, pinching);
+                          }
+                      } catch (Throwable ignored) {}
+                  }
+
+                  @JavascriptInterface
+                  public boolean clickAirMouse(float normX, float normY) {
+                      try {
+                          UltronAccessibilityService acc = UltronAccessibilityService.getInstance();
+                          if (acc == null) return false;
+                          DisplayMetrics dm = getResources().getDisplayMetrics();
+                          float x = normX * dm.widthPixels;
+                          float y = normY * dm.heightPixels;
+                          return acc.tapPoint(x, y);
+                      } catch (Throwable ignored) {
+                          return false;
+                      }
                   }
 
                   @JavascriptInterface
@@ -686,6 +833,7 @@ jobs:
 
               @Override
               public void onDestroy() {
+                  instance = null;
                   try {
                       if (wakeLock != null && wakeLock.isHeld()) {
                           wakeLock.release();
@@ -696,7 +844,7 @@ jobs:
           }
           EOF
 
-      - name: 10. Register Foreground Service Types & Permissions in AndroidManifest.xml
+      - name: 10. Register PiP Mode, Foreground Services & Permissions in AndroidManifest.xml
         run: |
           python3 - << 'EOF'
           with open("android/app/src/main/AndroidManifest.xml", "r") as f:
@@ -728,7 +876,7 @@ jobs:
                       android:foregroundServiceType="specialUse">
                       <property
                           android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                          android:value="Floating AI Assistant overlay" />
+                          android:value="Floating AI Assistant and Wireless Mouse Overlay" />
                   </service>
 
                   <service
@@ -750,6 +898,13 @@ jobs:
               xml = xml.replace(
                   "<application",
                   permissions + '\n    <application android:usesCleartextTraffic="true" android:hardwareAccelerated="true"',
+                  1
+              )
+
+          if "<activity" in xml and "supportsPictureInPicture" not in xml:
+              xml = xml.replace(
+                  "<activity",
+                  '<activity android:supportsPictureInPicture="true" android:resizeableActivity="true"',
                   1
               )
 
