@@ -3,15 +3,13 @@ import type { CustomGesture, Landmark, VisionResult } from '../types';
 
 const httpsUrl = (path: string): string => ['ht', 'tps://', path].join('');
 const WASM_PATH = httpsUrl('cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
-const MODEL_PATH = httpsUrl(
-  'storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
-);
+const MODEL_PATH = httpsUrl('storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task');
 
 const HOLD_DELAY_MS = 500;
 const POST_EMIT_LOCK_MS = 1200;
 
 // Palm-Ray Mouse Tuning
-const PINCH_THRESH = 0.055;
+const PINCH_THRESH = 0.058;
 let filteredX = 0.5, filteredY = 0.5;
 let prevTargetX = 0.5, prevTargetY = 0.5;
 
@@ -133,7 +131,7 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // MIRROR FIX: Removed "1 - x". Coordinates now perfectly match the mirrored video feed.
+    // MIRROR FIX: Coordinates map directly. If you move your hand right, the cursor moves right.
     if (mouselessMode) {
       const h = hands[0];
       const rayX = (h[5].x * 0.65 + h[8].x * 0.35); 
@@ -171,7 +169,7 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Checks ML Custom Signs first, then falls back to built-in ASL
+    // Try ML custom signs first, fallback to ASL
     let sign = classifyWithML(vector) || classifyASL(hands[0]);
 
     if (!sign) {
