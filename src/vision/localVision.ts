@@ -156,7 +156,7 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
 
       if (pinching && now - lastClickTime > 600) {
         lastClickTime = now; bridge?.clickAirMouse?.(filteredX, filteredY);
-        document.elementFromPoint(filteredX * window.innerWidth, filteredY * window.innerHeight)?.click();
+        (document.elementFromPoint(filteredX * window.innerWidth, filteredY * window.innerHeight) as HTMLElement | null)?.click();
       }
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
