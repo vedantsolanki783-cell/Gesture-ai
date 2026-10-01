@@ -1,16 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Bot, User, Send, Settings, CameraOff, Sun, Moon, Trash2, Mic, Paperclip, Copy, Zap, Camera } from 'lucide-react';
+import { Message, AppSettings, VisionResponse } from './types';
 import { generateLocalOrCloud } from './services/aiRouter';
-import { CameraView } from './components/CameraView';
-import { SettingsPanel } from './components/SettingsPanel';
+import SettingsPanel from './components/SettingsPanel';
+import CameraView from './components/CameraView';
 import { useVision } from './hooks/useVision';
 import { learnSign, clearTrainedSigns, getTrainedSignsCount } from './vision/localVision';
-import type { AppSettings, Message, VisionResult } from './types';
-import './styles.css';
 
 const defaults: AppSettings = {
   theme: 'dark', voiceEnabled: true, visionEnabled: false, confidenceThreshold: 0.72,
-  aiProvider: 'ollama', ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen2.5:1.5b',
+  aiProvider: 'ollama', ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen2.5:0.5b',
   geminiModel: 'gemini-2.5-flash', webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
   systemInstruction: 'You are NOVA. Answer concisely.', customGestures: []
 };
@@ -41,7 +40,7 @@ export default function App() {
   });
 
   const [messages, setMessages] = useState<Message[]>([
-    { id: '1', role: 'model', text: 'Hello! How can I assist you today?', timestamp: Date.now() }
+    { id: '1', role: 'model', content: 'Hello! How can I assist you today?', timestamp: Date.now() }
   ]);
   
   const [input, setInput] = useState('');
@@ -50,53 +49,54 @@ export default function App() {
   const [mlInput, setMlInput] = useState('');
   const chatEnd = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { localStorage.setItem('nova_settings', JSON.stringify(settings)); document.documentElement.dataset.theme = settings.theme; }, [settings]);
+  useEffect(() => { 
+    localStorage.setItem('nova_settings', JSON.stringify(settings)); 
+    if (settings.theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [settings]);
+
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, typing]);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
   };
 
-  const send = async (val = input) => {
+  const send = useCallback(async (val = input) => {
     const text = val.trim(); if (!text || typing) return;
-    setMessages(p => [...p, { id: crypto.randomUUID(), role: 'user', text, timestamp: Date.now() }]);
+    setMessages(p => [...p, { id: crypto.randomUUID(), role: 'user', content: text, timestamp: Date.now() }]);
     setInput(''); setTyping(true);
 
     const androidReply = executeAndroidAgentCommand(text);
     if (androidReply) {
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: androidReply, timestamp: Date.now() }]);
+      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', content: androidReply, timestamp: Date.now() }]);
       setTyping(false); return;
     }
 
     try {
-      const res = await fetch('http://localhost:11434/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: settings.ollamaModel,
-          messages: [
-            { role: 'system', content: settings.systemInstruction },
-            ...messages.map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.text })),
-            { role: 'user', content: text }
-          ],
-          stream: false
-        })
-      });
-      const data = await res.json();
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: data.message.content, timestamp: Date.now() }]);
+      const res = await generateLocalOrCloud(text, messages, settings);
+      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', content: res.text, timestamp: Date.now() }]);
     } catch {
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: '⚠️ Local AI Offline. Open Termux and run `ollama serve`.', timestamp: Date.now() }]);
+      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', content: '⚠️ Local AI Offline. Open Termux and run `ollama serve`.', timestamp: Date.now() }]);
     } finally { setTyping(false); }
-  };
+  }, [input, messages, settings, typing]);
 
-  const vision = useVision(settings, settings.customGestures, (res) => {
-    if (res.type === 'LETTER') setInput(p => p + res.value);
-    else if (res.value === 'CLEAR') setInput('');
-    else if (res.value === 'SEND') send();
-  });
+  const handleGestureDetected = useCallback((result: VisionResponse) => {
+    if (result.type === 'LETTER') {
+      setInput(p => p + result.value);
+    } else if (result.value === 'CLEAR') {
+      setInput('');
+    } else if (result.value === 'SEND') {
+      send();
+    }
+  }, [send]);
+
+  const vision = useVision(settings, settings.customGestures, handleGestureDetected);
 
   return (
-    <div className="flex flex-col h-screen bg-[#090D16] text-gray-100 font-sans overflow-hidden">
+    <div className="flex flex-col h-screen bg-[#090D16] text-gray-100 font-sans">
       
       {/* Header */}
       <header className="flex items-center justify-between px-4 py-3 bg-[#090D16] shrink-0 border-b border-gray-800/40">
@@ -131,7 +131,7 @@ export default function App() {
         <div className={`flex-shrink-0 bg-[#121927] rounded-2xl border border-gray-800/60 flex items-center justify-center relative overflow-hidden transition-all duration-300 ${settings.visionEnabled ? 'h-36' : 'h-16'}`}>
           {settings.visionEnabled ? (
             <div className="w-full h-full relative flex items-center justify-center">
-              <CameraView videoRef={vision.videoRef} enabled={settings.visionEnabled} status={vision.status} lastDetection={vision.lastDetection} onToggle={() => {}} settings={settings} />
+              <CameraView videoRef={vision.videoRef} enabled={settings.visionEnabled} status={vision.status} lastDetection={vision.lastDetection} onToggle={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} settings={settings} />
             </div>
           ) : (
             <div className="flex items-center gap-3">
@@ -160,7 +160,7 @@ export default function App() {
               <h2 className="text-xs font-bold text-white">Assistant</h2>
               <p className="text-[10px] text-gray-500">Jarvis + Ultron Generative Core</p>
             </div>
-            <button onClick={() => setMessages([{ id: '1', role: 'model', text: 'Hello! How can I assist you today?', timestamp: Date.now() }])} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-white px-2.5 py-1 bg-[#1E293B] rounded-lg border border-gray-700/50 transition-colors">
+            <button onClick={() => setMessages([{ id: '1', role: 'model', content: 'Hello! How can I assist you today?', timestamp: Date.now() }])} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-white px-2.5 py-1 bg-[#1E293B] rounded-lg border border-gray-700/50 transition-colors">
               <Trash2 size={12} /> Clear
             </button>
           </div>
@@ -176,9 +176,9 @@ export default function App() {
                     </div>
                     <div>
                       <div className="px-3.5 py-2.5 rounded-2xl rounded-tl-none max-w-full text-xs leading-relaxed bg-[#1E293B] text-gray-200 shadow-sm border border-gray-700/30">
-                        <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
+                        <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
                       </div>
-                      <button onClick={() => copyToClipboard(m.text)} className="text-gray-500 hover:text-gray-300 mt-1 ml-1 p-0.5 flex items-center gap-1 text-[10px]">
+                      <button onClick={() => copyToClipboard(m.content)} className="text-gray-500 hover:text-gray-300 mt-1 ml-1 p-0.5 flex items-center gap-1 text-[10px]">
                         <Copy size={11} />
                       </button>
                     </div>
@@ -188,7 +188,7 @@ export default function App() {
                 {m.role === 'user' && (
                   <>
                     <div className="px-3.5 py-2.5 rounded-2xl rounded-tr-none max-w-[75%] text-xs leading-relaxed bg-[#10B981] text-[#090D16] font-medium shadow-sm">
-                      <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
                     </div>
                     <div className="w-7 h-7 rounded-lg bg-[#10B981] flex items-center justify-center flex-shrink-0 text-[#090D16]">
                       <User size={15} strokeWidth={2} />
@@ -239,7 +239,7 @@ export default function App() {
         </div>
       </main>
 
-      {settingsOpen && <SettingsPanel settings={settings} onUpdate={setSettings} onClose={() => setSettingsOpen(false)} />}
+      <SettingsPanel isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} onSave={setSettings} />
     </div>
   );
 }
