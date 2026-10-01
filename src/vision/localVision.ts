@@ -7,22 +7,36 @@ const MODEL_PATH = httpsUrl(
   'storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
 );
 
-const HOLD_DELAY_MS = 400; // Faster detection once trained
-const POST_EMIT_LOCK_MS = 1250;
-const CONSENSUS_WINDOW = 6;
-const MIN_CONSENSUS_MATCH = 4;
-const MAX_FINGER_VELOCITY = 0.038;
-const MAX_WRIST_VELOCITY = 0.020;
-const RELEASE_FRAMES_REQUIRED = 5;
+// ============================================================================
+// PALM-RAY AIR MOUSE TUNING CONSTANTS
+// ============================================================================
+const ROI_X_MIN = 0.15;
+const ROI_X_MAX = 0.85;
+const ROI_Y_MIN = 0.15;
+const ROI_Y_MAX = 0.85;
 
-// ============================================================================
-// MACHINE LEARNING (KNN) STATE & LOGIC
-// ============================================================================
+const PINCH_DOWN_THRESH = 0.052;
+const PINCH_UP_THRESH = 0.075;
+const CLICK_DEBOUNCE_MS = 450;
+const SCROLL_DEBOUNCE_MS = 280;
+
+let mouselessMode = false;
+let isPinching = false;
+let lastClickTime = 0;
+let lastScrollTime = 0;
+let lastToggleTime = 0;
+
+// Dynamic filter coordinates
+let filteredX = 0.5;
+let filteredY = 0.5;
+let prevTargetX = 0.5;
+let prevTargetY = 0.5;
+
+// ML Database state
 interface MLEmbedding {
   label: string;
   vector: number[];
 }
-
 let mlDatabase: MLEmbedding[] = [];
 let pendingTrainLabel: string | null = null;
 
@@ -30,7 +44,7 @@ function loadMLDatabase() {
   try {
     const saved = localStorage.getItem('nova_ml_gestures');
     if (saved) mlDatabase = JSON.parse(saved);
-  } catch (e) {
+  } catch {
     mlDatabase = [];
   }
 }
@@ -50,12 +64,9 @@ export function getTrainedSignsCount() {
   return mlDatabase.length;
 }
 
-// Converts 21 3D landmarks into a scale-invariant, translation-invariant 63D vector
 function normalizeHandToVector(lm: Landmark[]): number[] {
   const wrist = lm[0];
-  let maxDist = 0.0001; // prevent divide by zero
-  
-  // 1. Shift everything so wrist is at (0,0,0)
+  let maxDist = 0.0001;
   const centered = lm.map(p => {
     const dx = p.x - wrist.x;
     const dy = p.y - wrist.y;
@@ -65,7 +76,6 @@ function normalizeHandToVector(lm: Landmark[]): number[] {
     return { x: dx, y: dy, z: dz };
   });
 
-  // 2. Scale by max distance and flatten into an array of 63 numbers
   const vector: number[] = [];
   for (const p of centered) {
     vector.push(p.x / maxDist, p.y / maxDist, p.z / maxDist);
@@ -73,10 +83,8 @@ function normalizeHandToVector(lm: Landmark[]): number[] {
   return vector;
 }
 
-// Compares current hand to saved hands using Euclidean distance
 function classifyWithML(vector: number[]): { label: string; distance: number } {
   if (mlDatabase.length === 0) return { label: '', distance: 999 };
-
   let bestLabel = '';
   let minDist = Infinity;
 
@@ -91,7 +99,6 @@ function classifyWithML(vector: number[]): { label: string; distance: number } {
     }
   }
 
-  // The distance threshold. If the closest match is too different, reject it.
   if (minDist < 1.15) {
     return { label: bestLabel, distance: minDist };
   }
@@ -99,29 +106,76 @@ function classifyWithML(vector: number[]): { label: string; distance: number } {
 }
 
 // ============================================================================
-// CORE VISION STATE
+// PALM-RAY VECTOR & DYNAMIC SMOOTHING CALCULATION
+// ============================================================================
+const d = (a: Landmark, b: Landmark) => Math.hypot(a.x - b.x, a.y - b.y);
+
+function computePalmRayTarget(lm: Landmark[]): { targetX: number; targetY: number; isScrolling: boolean } {
+  const wrist = lm[0];
+  const indexMcp = lm[5];
+  const indexPip = lm[6];
+  const indexTip = lm[8];
+  const middleTip = lm[12];
+  const palmCenter = {
+    x: (wrist.x + indexMcp.x + lm[17].x) / 3,
+    y: (wrist.y + indexMcp.y + lm[17].y) / 3
+  };
+
+  // Two-finger scroll detection: index and middle fingers both extended upward
+  const isIndexUp = indexTip.y < indexPip.y;
+  const isMiddleUp = middleTip.y < lm[10].y;
+  const isRingCurled = lm[16].y > lm[14].y;
+  const isScrolling = isIndexUp && isMiddleUp && isRingCurled;
+
+  // Use knuckle vector to stabilize against fingertip twitching during pinch
+  const rayProjX = 1.0 - (indexMcp.x * 0.65 + indexTip.x * 0.35);
+  const rayProjY = indexMcp.y * 0.65 + indexTip.y * 0.35;
+
+  // Remap active camera ROI to tablet edges
+  const normX = (rayProjX - ROI_X_MIN) / (ROI_X_MAX - ROI_X_MIN);
+  const normY = (rayProjY - ROI_Y_MIN) / (ROI_Y_MAX - ROI_Y_MIN);
+
+  return {
+    targetX: Math.max(0.005, Math.min(0.995, normX)),
+    targetY: Math.max(0.005, Math.min(0.995, normY)),
+    isScrolling
+  };
+}
+
+function updateAdaptiveMouseFilter(rawX: number, rawY: number): { x: number; y: number } {
+  const velocity = Math.hypot(rawX - prevTargetX, rawY - prevTargetY);
+  prevTargetX = rawX;
+  prevTargetY = rawY;
+
+  // Dynamic alpha: high speed = fast tracking; low speed = heavy jitter reduction
+  let alpha = 0.55;
+  if (velocity < 0.004) {
+    alpha = 0.15; // Jitter suppression deadband
+  } else if (velocity < 0.02) {
+    alpha = 0.35;
+  } else if (velocity > 0.08) {
+    alpha = 0.85; // Low-latency fast tracking
+  }
+
+  filteredX = filteredX * (1 - alpha) + rawX * alpha;
+  filteredY = filteredY * (1 - alpha) + rawY * alpha;
+
+  return { x: filteredX, y: filteredY };
+}
+
+// ============================================================================
+// MEDIAPIPE CORE
 // ============================================================================
 let landmarkerPromise: Promise<HandLandmarker> | null = null;
 let lastVideoTime = -1;
-let mouselessMode = false;
-let lastToggleTime = 0;
-let lastClickTime = 0;
-let lastScrollTime = 0;
 let activeVideoEl: HTMLVideoElement | null = null;
 let bgIntervalId: any = null;
-
-let smoothNormX = 0.5;
-let smoothNormY = 0.5;
-
-let prevLandmarks: Landmark[] | null = null;
-let smoothedLandmarks: Landmark[] | null = null;
 
 let candidateSign = '';
 let candidateStartTime = 0;
 let latchedSign = '';
 let releaseFrameCount = 0;
 let lastEmittedTime = 0;
-
 const recentPredictions: VisionResult[] = [];
 
 function ensureBackgroundVisionLoop() {
@@ -148,18 +202,18 @@ async function getLandmarker(): Promise<HandLandmarker> {
           baseOptions: { modelAssetPath: MODEL_PATH, delegate: preferredDelegate },
           runningMode: 'VIDEO',
           numHands: 2,
-          minHandDetectionConfidence: 0.48,
-          minHandPresenceConfidence: 0.48,
-          minTrackingConfidence: 0.48
+          minHandDetectionConfidence: 0.45,
+          minHandPresenceConfidence: 0.45,
+          minTrackingConfidence: 0.45
         });
       } catch {
         return await HandLandmarker.createFromOptions(vision, {
           baseOptions: { modelAssetPath: MODEL_PATH, delegate: 'CPU' },
           runningMode: 'VIDEO',
           numHands: 2,
-          minHandDetectionConfidence: 0.48,
-          minHandPresenceConfidence: 0.48,
-          minTrackingConfidence: 0.48
+          minHandDetectionConfidence: 0.45,
+          minHandPresenceConfidence: 0.45,
+          minTrackingConfidence: 0.45
         });
       }
     })();
@@ -167,186 +221,13 @@ async function getLandmarker(): Promise<HandLandmarker> {
   return landmarkerPromise;
 }
 
-const d = (a: Landmark, b: Landmark) => Math.hypot(a.x - b.x, a.y - b.y);
-
-function smoothAndMeasureVelocity(raw: Landmark[]): { lm: Landmark[]; fingerVelocity: number; wristVelocity: number } {
-  if (!smoothedLandmarks || smoothedLandmarks.length !== raw.length) {
-    smoothedLandmarks = raw.map(p => ({ ...p }));
-    prevLandmarks = raw.map(p => ({ ...p }));
-    return { lm: smoothedLandmarks, fingerVelocity: 0, wristVelocity: 0 };
-  }
-
-  const alpha = 0.5;
-  for (let i = 0; i < raw.length; i++) {
-    smoothedLandmarks[i] = {
-      x: smoothedLandmarks[i].x * (1 - alpha) + raw[i].x * alpha,
-      y: smoothedLandmarks[i].y * (1 - alpha) + raw[i].y * alpha,
-      z: (smoothedLandmarks[i].z || 0) * (1 - alpha) + (raw[i].z || 0) * alpha
-    };
-  }
-
-  const tipIndices = [4, 8, 12, 16, 20];
-  let totalDelta = 0;
-  let wristDelta = 0;
-  if (prevLandmarks) {
-    for (const idx of tipIndices) {
-      totalDelta += d(smoothedLandmarks[idx], prevLandmarks[idx]);
-    }
-    wristDelta = d(smoothedLandmarks[0], prevLandmarks[0]);
-  }
-  prevLandmarks = smoothedLandmarks.map(p => ({ ...p }));
-
-  return {
-    lm: smoothedLandmarks,
-    fingerVelocity: totalDelta / tipIndices.length,
-    wristVelocity: wristDelta
-  };
-}
-
-function jointAngleDeg(mcp: Landmark, pip: Landmark, tip: Landmark): number {
-  const v1x = mcp.x - pip.x;
-  const v1y = mcp.y - pip.y;
-  const v2x = tip.x - pip.x;
-  const v2y = tip.y - pip.y;
-  const dot = v1x * v2x + v1y * v2y;
-  const mag = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y);
-  if (mag === 0) return 180;
-  const cos = Math.max(-1, Math.min(1, dot / mag));
-  return (Math.acos(cos) * 180) / Math.PI;
-}
-
-function isTwoStackedHorizontalHands(h1: Landmark[], h2: Landmark[]): boolean {
-  if (!h1 || !h2 || h1.length < 21 || h2.length < 21) return false;
-  const isHoriz = (lm: Landmark[]) =>
-    Math.abs(lm[9].x - lm[0].x) > Math.abs(lm[9].y - lm[0].y) * 0.75 &&
-    Math.abs(lm[12].x - lm[0].x) > Math.abs(lm[12].y - lm[0].y) * 0.75;
-  const verticalGap = Math.abs(h1[9].y - h2[9].y);
-  const horizontalOverlap = Math.abs(h1[9].x - h2[9].x);
-  return isHoriz(h1) && isHoriz(h2) && verticalGap > 0.1 && horizontalOverlap < 0.5;
-}
-
-function isOnlyMiddleFinger(lm: Landmark[]): boolean {
-  if (!lm || lm.length < 21) return false;
-  const palm = Math.max(d(lm[0], lm[9]), 0.05);
-  const middleStraight = jointAngleDeg(lm[9], lm[10], lm[12]) > 142 && lm[12].y < lm[10].y;
-  const othersCurled =
-    lm[12].y < lm[8].y - palm * 0.3 &&
-    lm[12].y < lm[16].y - palm * 0.3 &&
-    lm[12].y < lm[20].y - palm * 0.3;
-  return middleStraight && othersCurled;
-}
-
-function showModeNotification(isMouseless: boolean) {
-  const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
-  if (isMouseless && bridge && typeof bridge.enableOverlayBubble === 'function') {
-    try { bridge.enableOverlayBubble(); } catch {}
-  }
-
-  let badge = document.getElementById('nova-mode-badge');
-  if (!badge) {
-    badge = document.createElement('div');
-    badge.id = 'nova-mode-badge';
-    Object.assign(badge.style, {
-      position: 'fixed',
-      top: '14px',
-      left: '50%',
-      transform: 'translateX(-50%)',
-      padding: '8px 16px',
-      borderRadius: '999px',
-      fontWeight: 'bold',
-      fontSize: '13px',
-      color: '#ffffff',
-      zIndex: '100000',
-      boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-      pointerEvents: 'none',
-      transition: 'opacity 0.25s ease'
-    });
-    document.body.appendChild(badge);
-  }
-  badge.style.background = isMouseless ? '#dc2626' : '#10b981';
-  badge.textContent = isMouseless
-    ? '🖱 System Wireless Mouse ON'
-    : '✋ ML Sign Mode ON';
-  badge.style.opacity = '1';
-  setTimeout(() => {
-    if (badge && !mouselessMode) badge.style.opacity = '0';
-  }, 2500);
-}
-
 function updateMouselessCursor(visible: boolean, normX = 0.5, normY = 0.5, pinching = false) {
   const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
   if (bridge && typeof bridge.updateAirMouse === 'function') {
-    try { bridge.updateAirMouse(visible, normX, normY, pinching); } catch {}
+    try {
+      bridge.updateAirMouse(visible, normX, normY, pinching);
+    } catch {}
   }
-}
-
-function getConsensusPrediction(raw: VisionResult): VisionResult {
-  recentPredictions.push(raw);
-  if (recentPredictions.length > CONSENSUS_WINDOW) {
-    recentPredictions.shift();
-  }
-
-  const counts = new Map<string, { count: number; sample: VisionResult }>();
-  for (const item of recentPredictions) {
-    if (item.type === 'UNKNOWN' || !item.value) continue;
-    const prev = counts.get(item.value);
-    if (prev) prev.count++;
-    else counts.set(item.value, { count: 1, sample: item });
-  }
-
-  let bestSign = '';
-  let bestCount = 0;
-  let bestSample: VisionResult = { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
-
-  for (const [sign, data] of counts.entries()) {
-    if (data.count > bestCount) {
-      bestSign = sign;
-      bestCount = data.count;
-      bestSample = data.sample;
-    }
-  }
-
-  if (bestSign && bestCount >= MIN_CONSENSUS_MATCH) {
-    return bestSample;
-  }
-  return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
-}
-
-function stabilizeSingleShot(raw: VisionResult, fingerVelocity: number): VisionResult {
-  const empty: VisionResult = { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
-  const now = Date.now();
-
-  if (now - lastEmittedTime < POST_EMIT_LOCK_MS) return empty;
-  
-  // Relaxed velocity constraint to allow dynamic signs if needed, but strict enough to prevent blur
-  if (fingerVelocity > MAX_FINGER_VELOCITY) return empty;
-
-  const consensus = getConsensusPrediction(raw);
-
-  if (consensus.type === 'UNKNOWN' || !consensus.value) {
-    releaseFrameCount++;
-    if (releaseFrameCount >= RELEASE_FRAMES_REQUIRED) {
-      latchedSign = '';
-      candidateSign = '';
-    }
-    return empty;
-  }
-
-  releaseFrameCount = 0;
-  if (consensus.value === latchedSign) return empty;
-
-  if (consensus.value !== candidateSign) {
-    candidateSign = consensus.value;
-    candidateStartTime = now;
-    return empty;
-  }
-
-  if (now - candidateStartTime < HOLD_DELAY_MS) return empty;
-
-  latchedSign = consensus.value;
-  lastEmittedTime = now;
-  recentPredictions.length = 0;
-  return consensus;
 }
 
 export async function localVision(video: HTMLVideoElement, _timestamp: number): Promise<VisionResult> {
@@ -381,65 +262,70 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
         latchedSign = '';
         candidateSign = '';
         recentPredictions.length = 0;
-        smoothedLandmarks = null;
       }
       updateMouselessCursor(false);
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Still check for mouseless toggle (Hardcoded so it never breaks!)
-    if (
-      hands.length >= 2 &&
-      (isTwoStackedHorizontalHands(hands[0], hands[1]) ||
-        (isOnlyMiddleFinger(hands[0]) && isOnlyMiddleFinger(hands[1])))
-    ) {
-      if (now - lastToggleTime > 1400) {
-        mouselessMode = !mouselessMode;
-        lastToggleTime = now;
-        showModeNotification(mouselessMode);
-        updateMouselessCursor(mouselessMode);
+    // Toggle Mouseless Mode: 2 Hands horizontal or middle finger gesture
+    if (hands.length >= 2) {
+      const h1 = hands[0];
+      const h2 = hands[1];
+      const isHoriz1 = Math.abs(h1[9].x - h1[0].x) > Math.abs(h1[9].y - h1[0].y) * 0.75;
+      const isHoriz2 = Math.abs(h2[9].x - h2[0].x) > Math.abs(h2[9].y - h2[0].y) * 0.75;
+      if (isHoriz1 && isHoriz2 && Math.abs(h1[9].y - h2[9].y) > 0.1) {
+        if (now - lastToggleTime > 1400) {
+          mouselessMode = !mouselessMode;
+          lastToggleTime = now;
+          const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
+          if (mouselessMode && bridge && typeof bridge.enableOverlayBubble === 'function') {
+            try { bridge.enableOverlayBubble(); } catch {}
+          }
+          updateMouselessCursor(mouselessMode);
+        }
+        return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
       }
-      return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
+    // PALM-RAY ENGINE MOUSE EXECUTION
     if (mouselessMode) {
-      const indexTip = hands[0][8];
-      const thumbTip = hands[0][4];
+      const hand = hands[0];
+      const { targetX, targetY, isScrolling } = computePalmRayTarget(hand);
+      const filtered = updateAdaptiveMouseFilter(targetX, targetY);
 
-      const rawX = (1 - indexTip.x - 0.12) / 0.76;
-      const rawY = (indexTip.y - 0.12) / 0.76;
-      const targetX = Math.max(0.01, Math.min(0.99, rawX));
-      const targetY = Math.max(0.01, Math.min(0.99, rawY));
+      // Pinch distance with hysteresis
+      const pinchDist = d(hand[8], hand[4]);
+      if (!isPinching && pinchDist < PINCH_DOWN_THRESH) {
+        isPinching = true;
+      } else if (isPinching && pinchDist > PINCH_UP_THRESH) {
+        isPinching = false;
+      }
 
-      smoothNormX = smoothNormX * 0.5 + targetX * 0.5;
-      smoothNormY = smoothNormY * 0.5 + targetY * 0.5;
-
-      const pinching = d(indexTip, thumbTip) < 0.062;
-      updateMouselessCursor(true, smoothNormX, smoothNormY, pinching);
+      updateMouselessCursor(true, filtered.x, filtered.y, isPinching);
 
       const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
 
-      if (smoothNormY < 0.12) {
-        window.scrollBy({ top: -15, behavior: 'auto' });
-        if (bridge && now - lastScrollTime > 900) {
-          lastScrollTime = now;
-          try { bridge.swipeScreen(500, 450, 500, 1250, 260); } catch {}
-        }
-      } else if (smoothNormY > 0.88) {
-        window.scrollBy({ top: 15, behavior: 'auto' });
-        if (bridge && now - lastScrollTime > 900) {
-          lastScrollTime = now;
-          try { bridge.swipeScreen(500, 1250, 500, 450, 260); } catch {}
+      // Two-Finger Scroll
+      if (isScrolling && now - lastScrollTime > SCROLL_DEBOUNCE_MS) {
+        lastScrollTime = now;
+        const scrollDelta = filtered.y < 0.5 ? -350 : 350;
+        window.scrollBy({ top: scrollDelta, behavior: 'smooth' });
+        if (bridge && typeof bridge.swipeScreen === 'function') {
+          try {
+            if (filtered.y < 0.5) bridge.swipeScreen(500, 350, 500, 1200, 240);
+            else bridge.swipeScreen(500, 1200, 500, 350, 240);
+          } catch {}
         }
       }
 
-      if (pinching && now - lastClickTime > 680) {
+      // Pinch Click Execution
+      if (isPinching && now - lastClickTime > CLICK_DEBOUNCE_MS) {
         lastClickTime = now;
         if (bridge && typeof bridge.clickAirMouse === 'function') {
-          try { bridge.clickAirMouse(smoothNormX, smoothNormY); } catch {}
+          try { bridge.clickAirMouse(filtered.x, filtered.y); } catch {}
         }
-        const cx = smoothNormX * window.innerWidth;
-        const cy = smoothNormY * window.innerHeight;
+        const cx = filtered.x * window.innerWidth;
+        const cy = filtered.y * window.innerHeight;
         const el = document.elementFromPoint(cx, cy) as HTMLElement | null;
         if (el) {
           el.click();
@@ -449,44 +335,65 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    const { lm, fingerVelocity } = smoothAndMeasureVelocity(hands[0]);
-    const vector = normalizeHandToVector(lm);
+    // ML TRAINING & CLASSIFICATION
+    const vector = normalizeHandToVector(hands[0]);
 
-    // If the user tapped "Learn Sign" in the UI, save it right now!
     if (pendingTrainLabel) {
       mlDatabase.push({ label: pendingTrainLabel, vector });
       localStorage.setItem('nova_ml_gestures', JSON.stringify(mlDatabase));
-      console.log(`ML Engine: Learned "${pendingTrainLabel}"`);
-      pendingTrainLabel = null; 
-      // Vibrate tablet to confirm
+      pendingTrainLabel = null;
       if (navigator.vibrate) navigator.vibrate(100);
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Run ML Classification
     const mlMatch = classifyWithML(vector);
-    
     let rawResult: VisionResult = { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
-    
+
     if (mlMatch.label) {
-      const isCmd = mlMatch.label === 'CLEAR' || mlMatch.label === 'SEND';
       rawResult = {
-        type: isCmd ? 'GESTURE' : 'LETTER',
+        type: mlMatch.label === 'CLEAR' || mlMatch.label === 'SEND' ? 'GESTURE' : 'LETTER',
         value: mlMatch.label,
-        confidence: 1.0 - (mlMatch.distance / 2),
+        confidence: Math.max(0.5, 1.0 - mlMatch.distance / 2),
         source: 'local'
       };
-    } else {
-      // If database is empty or no match, fall back to "Awaiting Training"
-      if (mlDatabase.length === 0) {
-        if (now - lastEmittedTime > 5000) {
-          lastEmittedTime = now;
-          console.warn("ML Engine empty! Train signs in the sidebar.");
-        }
+    }
+
+    // Consensus Single-Shot Latch
+    recentPredictions.push(rawResult);
+    if (recentPredictions.length > 6) recentPredictions.shift();
+
+    const counts = new Map<string, number>();
+    for (const r of recentPredictions) {
+      if (r.value) counts.set(r.value, (counts.get(r.value) || 0) + 1);
+    }
+
+    let topSign = '';
+    let topCount = 0;
+    for (const [k, v] of counts.entries()) {
+      if (v > topCount) {
+        topSign = k;
+        topCount = v;
       }
     }
 
-    return stabilizeSingleShot(rawResult, fingerVelocity);
+    if (topCount >= 4 && topSign && topSign !== latchedSign) {
+      if (topSign !== candidateSign) {
+        candidateSign = topSign;
+        candidateStartTime = now;
+      } else if (now - candidateStartTime > 420 && now - lastEmittedTime > 1200) {
+        latchedSign = topSign;
+        lastEmittedTime = now;
+        recentPredictions.length = 0;
+        return {
+          type: topSign === 'CLEAR' || topSign === 'SEND' ? 'GESTURE' : 'LETTER',
+          value: topSign,
+          confidence: 0.95,
+          source: 'local'
+        };
+      }
+    }
+
+    return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
   } catch (err) {
     console.error('Vision error:', err);
     return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
@@ -499,9 +406,6 @@ export async function isLocalVisionModelAvailable() {
 
 export function applyCustomGesture(result: VisionResult, gestures: CustomGesture[]): VisionResult {
   if (result.type !== 'GESTURE') return result;
-  if (result.value.toUpperCase().includes('THEME')) {
-    return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
-  }
   const match = gestures.find(g => g.name.toUpperCase() === result.value.toUpperCase());
   return match ? { ...result, value: match.name } : result;
 }
