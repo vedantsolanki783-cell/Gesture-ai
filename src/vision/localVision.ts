@@ -133,11 +133,9 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // AGI Palm-Ray Mouse Engine (Mirroring Fix Applied)
+    // MIRROR FIX: Removed "1 - x". Coordinates now perfectly match the mirrored video feed.
     if (mouselessMode) {
       const h = hands[0];
-      
-      // Removed the '1 -' math. The raw MediaPipe X aligns perfectly with the mirrored HTML video preview.
       const rayX = (h[5].x * 0.65 + h[8].x * 0.35); 
       const rayY = (h[5].y * 0.65 + h[8].y * 0.35);
       
@@ -173,6 +171,7 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
+    // Checks ML Custom Signs first, then falls back to built-in ASL
     let sign = classifyWithML(vector) || classifyASL(hands[0]);
 
     if (!sign) {
