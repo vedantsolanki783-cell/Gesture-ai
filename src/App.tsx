@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bot, User, Send, Settings, Sparkles, CameraOff, Sun, Moon, Trash2, Mic, Paperclip, CheckSquare } from 'lucide-react';
+import { Bot, User, Send, Settings, CameraOff, Sun, Moon, Trash2, Mic, Paperclip, Copy, Zap } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { CameraView } from './components/CameraView';
 import { SettingsPanel } from './components/SettingsPanel';
@@ -10,7 +10,7 @@ import './styles.css';
 
 const defaults: AppSettings = {
   theme: 'dark', voiceEnabled: true, visionEnabled: false, confidenceThreshold: 0.72,
-  aiProvider: 'ollama', ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen2.5:0.5b',
+  aiProvider: 'ollama', ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen2.5:1.5b',
   geminiModel: 'gemini-2.5-flash', webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
   systemInstruction: 'You are NOVA. Answer concisely.', customGestures: []
 };
@@ -29,6 +29,7 @@ function executeAndroidAgentCommand(rawText: string): string | null {
   if (isOverlay) return bridge.enableOverlayBubble() === 'OPENED_OVERLAY_SETTINGS' ? '⚡ Opening Settings...' : '⚡ Floating Bubble Active!';
   if (isUltron) { bridge.openAccessibilitySettings(); return '🤖 Opening Accessibility Settings...'; }
   if (openAppMatch && bridge.openApp(openAppMatch[1].trim())) return `🚀 Launching ${openAppMatch[1].toUpperCase()}...`;
+  if (bridge && !bridge.isUltronConnected()) { bridge.openAccessibilitySettings(); return '⚠️ Ultron OFF. Turn it ON.'; }
   if (isHome) { bridge.globalAction('HOME'); return '🏠 Executed HOME.'; }
   if (isBack) { bridge.globalAction('BACK'); return '🔙 Executed BACK.'; }
   return null;
@@ -52,6 +53,10 @@ export default function App() {
   useEffect(() => { localStorage.setItem('nova_settings', JSON.stringify(settings)); document.documentElement.dataset.theme = settings.theme; }, [settings]);
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, typing]);
 
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+  };
+
   const send = async (val = input) => {
     const text = val.trim(); if (!text || typing) return;
     setMessages(p => [...p, { id: crypto.randomUUID(), role: 'user', text, timestamp: Date.now() }]);
@@ -64,10 +69,23 @@ export default function App() {
     }
 
     try {
-      const res = await generateLocalOrCloud(text, messages, settings);
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: res.text, timestamp: Date.now() }]);
+      const res = await fetch('http://localhost:11434/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: settings.ollamaModel,
+          messages: [
+            { role: 'system', content: settings.systemInstruction },
+            ...messages.map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.text })),
+            { role: 'user', content: text }
+          ],
+          stream: false
+        })
+      });
+      const data = await res.json();
+      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: data.message.content, timestamp: Date.now() }]);
     } catch {
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: '⚠️ Local AI Offline. Run `ollama serve`.', timestamp: Date.now() }]);
+      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: '⚠️ Local AI Offline. Open Termux and run `ollama serve`.', timestamp: Date.now() }]);
     } finally { setTyping(false); }
   };
 
@@ -80,28 +98,29 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-[#090D16] text-gray-100 font-sans">
       
-      {/* Header (Exactly like Image 2) */}
+      {/* Header */}
       <header className="flex items-center justify-between p-4 bg-[#090D16]">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-transparent border-2 border-[#10B981] flex items-center justify-center">
-            <Sparkles size={18} className="text-[#10B981]" />
+          <div className="w-10 h-10 rounded-full border border-cyan-500 shadow-[0_0_12px_rgba(6,182,212,0.4)] flex items-center justify-center bg-black/50">
+            <Zap size={20} fill="currentColor" className="text-yellow-500" />
           </div>
           <div>
-            <h1 className="font-bold text-sm tracking-widest text-white">NOVA GESTURE AI</h1>
-            <p className="text-[10px] text-[#10B981] flex items-center gap-1 font-medium tracking-wide">
-              <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full inline-block"></span> JARVIS + ULTRON CANVAS · Local · {settings.ollamaModel}
+            <h1 className="font-bold text-[13px] tracking-widest text-white uppercase">NOVA GESTURE AI</h1>
+            <p className="text-[10px] text-gray-400 flex items-center gap-1.5 font-medium tracking-wide">
+              <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full inline-block"></span> 
+              JARVIS + ULTRON CANVAS · Local · {settings.ollamaModel}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} className="p-2 bg-[#1E293B] rounded-lg text-gray-400 hover:text-white transition-colors">
-            <CameraOff size={18} />
+          <button onClick={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} className="p-2 bg-transparent hover:bg-[#1E293B] rounded-lg text-gray-400 transition-colors">
+            <CameraOff size={20} strokeWidth={1.5} />
           </button>
-          <button onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))} className="p-2 bg-[#1E293B] rounded-lg text-gray-400 hover:text-white transition-colors">
-            {settings.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+          <button onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))} className="p-2 bg-transparent hover:bg-[#1E293B] rounded-lg text-gray-400 transition-colors">
+            {settings.theme === 'dark' ? <Sun size={20} strokeWidth={1.5} /> : <Moon size={20} strokeWidth={1.5} />}
           </button>
-          <button onClick={() => setSettingsOpen(true)} className="p-2 bg-[#1E293B] rounded-lg text-gray-400 hover:text-white transition-colors">
-            <Settings size={18} />
+          <button onClick={() => setSettingsOpen(true)} className="p-2 bg-transparent hover:bg-[#1E293B] rounded-lg text-gray-400 transition-colors">
+            <Settings size={20} strokeWidth={1.5} />
           </button>
         </div>
       </header>
@@ -109,14 +128,14 @@ export default function App() {
       <main className="flex-1 flex flex-col p-4 gap-4 overflow-hidden max-w-4xl mx-auto w-full">
         
         {/* Top Camera Block */}
-        <div className="flex-shrink-0 bg-[#111827] rounded-3xl border border-gray-800 flex items-center justify-center relative overflow-hidden" style={{ minHeight: '220px' }}>
+        <div className="flex-shrink-0 bg-[#121927] rounded-3xl border border-gray-800/60 flex items-center justify-center relative overflow-hidden" style={{ minHeight: '200px' }}>
           {settings.visionEnabled ? (
             <CameraView videoRef={vision.videoRef} enabled={settings.visionEnabled} status={vision.status} lastDetection={vision.lastDetection} onToggle={() => {}} settings={settings} />
           ) : (
-            <div className="flex flex-col items-center gap-3">
-              <CameraOff size={32} className="text-gray-500" />
-              <p className="text-gray-400 font-medium">Vision is offline</p>
-              <button onClick={() => setSettings(s => ({...s, visionEnabled: true}))} className="px-4 py-1.5 bg-[#10B981] text-black font-bold text-sm rounded-full shadow-lg shadow-[#10b981]/20">
+            <div className="flex flex-col items-center gap-4">
+              <CameraOff size={42} strokeWidth={1} className="text-gray-500" />
+              <p className="text-gray-400 font-medium text-sm">Vision is offline</p>
+              <button onClick={() => setSettings(s => ({...s, visionEnabled: true}))} className="px-5 py-2 bg-[#10B981] text-black font-bold text-xs rounded-full shadow-lg shadow-[#10B981]/20 hover:bg-[#059669] transition-colors">
                 Enable camera
               </button>
             </div>
@@ -132,45 +151,59 @@ export default function App() {
         </div>
 
         {/* Chat Section */}
-        <div className="flex-1 bg-[#111827] rounded-3xl border border-gray-800 flex flex-col overflow-hidden relative">
-          <div className="flex items-center justify-between p-4 border-b border-gray-800">
+        <div className="flex-1 bg-[#090D16] rounded-3xl border border-gray-800/60 flex flex-col overflow-hidden relative">
+          
+          <div className="flex items-center justify-between p-4 border-b border-gray-800/60 bg-[#0C111D]">
             <div>
               <h2 className="text-sm font-bold text-white">Assistant</h2>
-              <p className="text-xs text-gray-500">Jarvis + Ultron Generative Core</p>
+              <p className="text-[11px] text-gray-500">Jarvis + Ultron Generative Core</p>
             </div>
-            <button onClick={() => setMessages([{ id: '1', role: 'model', text: 'Hello! How can I assist you today?', timestamp: Date.now() }])} className="flex items-center gap-1 text-xs text-gray-400 hover:text-white px-3 py-1.5 bg-[#1E293B] rounded-lg">
+            <button onClick={() => setMessages([{ id: '1', role: 'model', text: 'Hello! How can I assist you today?', timestamp: Date.now() }])} className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white px-3 py-1.5 bg-[#1E293B] rounded-lg border border-gray-700/50 transition-colors">
               <Trash2 size={14} /> Clear
             </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-6">
             {messages.map(m => (
-              <div key={m.id} className={`flex items-end gap-3 ${m.role === 'user' ? 'justify-end' : ''}`}>
-                {m.role === 'model' && (
-                  <div className="w-8 h-8 rounded-full bg-[#10B981]/10 border border-[#10B981]/30 flex items-center justify-center text-[#10B981] flex-shrink-0">
-                    <Bot size={16} />
-                  </div>
-                )}
+              <div key={m.id} className={`flex items-start gap-3 w-full ${m.role === 'user' ? 'justify-end' : ''}`}>
                 
-                <div className={`px-4 py-3 rounded-2xl max-w-[75%] text-sm leading-relaxed ${m.role === 'user' ? 'bg-[#10B981] text-black rounded-br-none font-medium' : 'bg-[#1E293B] text-gray-200 rounded-bl-none'}`}>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
-                </div>
-
-                {m.role === 'user' && (
-                  <div className="w-8 h-8 rounded-full bg-[#10B981] flex items-center justify-center text-black flex-shrink-0">
-                    <User size={16} />
-                  </div>
+                {/* AI Bubble */}
+                {m.role === 'model' && (
+                  <>
+                    <div className="w-8 h-8 flex items-center justify-center flex-shrink-0 text-[#10B981]">
+                      <Bot size={22} strokeWidth={1.5} />
+                    </div>
+                    <div className="px-4 py-3 rounded-2xl rounded-tl-none max-w-[75%] text-sm leading-relaxed bg-[#1E293B] text-gray-200 shadow-sm">
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
+                    </div>
+                    <button onClick={() => copyToClipboard(m.text)} className="text-gray-500 hover:text-gray-300 mt-2 p-1">
+                      <Copy size={14} />
+                    </button>
+                  </>
                 )}
+
+                {/* User Bubble */}
+                {m.role === 'user' && (
+                  <>
+                    <div className="px-4 py-3 rounded-2xl rounded-tr-none max-w-[75%] text-sm leading-relaxed bg-[#10B981] text-[#090D16] font-medium shadow-sm">
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
+                    </div>
+                    <div className="w-8 h-8 rounded-lg bg-[#10B981] flex items-center justify-center flex-shrink-0 text-[#090D16]">
+                      <User size={18} strokeWidth={2} />
+                    </div>
+                  </>
+                )}
+
               </div>
             ))}
 
-            {/* THE NEW THINKING ANIMATION */}
+            {/* Bouncing Dots Thinking Animation */}
             {typing && (
-              <div className="flex items-end gap-3">
-                <div className="w-8 h-8 rounded-full bg-[#10B981]/10 border border-[#10B981]/30 flex items-center justify-center text-[#10B981] flex-shrink-0">
-                  <Bot size={16} />
+              <div className="flex items-start gap-3 w-full">
+                <div className="w-8 h-8 flex items-center justify-center flex-shrink-0 text-[#10B981]">
+                  <Bot size={22} strokeWidth={1.5} />
                 </div>
-                <div className="bg-[#1E293B] px-5 py-4 rounded-2xl rounded-bl-none flex items-center gap-2">
+                <div className="bg-[#1E293B] px-5 py-4 rounded-2xl rounded-tl-none flex items-center gap-2 shadow-sm">
                   <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-bounce"></span>
                   <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
                   <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
@@ -181,10 +214,10 @@ export default function App() {
           </div>
 
           {/* Input Bar */}
-          <div className="p-4 bg-[#111827]">
-            <div className="flex items-center gap-2 bg-[#1E293B] rounded-2xl p-1 border border-gray-700">
-              <button className="p-3 text-gray-400 hover:text-white"><Mic size={18} /></button>
-              <button className="p-3 text-gray-400 hover:text-white"><Paperclip size={18} /></button>
+          <div className="p-4 bg-[#090D16]">
+            <div className="flex items-center gap-2 bg-[#121927] rounded-xl p-1 border border-gray-800">
+              <button className="p-3 text-gray-400 hover:text-white transition-colors"><Mic size={18} /></button>
+              <button className="p-3 text-gray-400 hover:text-white transition-colors"><Paperclip size={18} /></button>
               <input 
                 value={input} 
                 onChange={e => setInput(e.target.value)} 
@@ -195,9 +228,9 @@ export default function App() {
               <button 
                 onClick={() => send()} 
                 disabled={!input.trim() || typing} 
-                className={`p-3 mr-1 rounded-xl transition-colors ${input.trim() ? 'bg-[#10B981] text-black shadow-lg shadow-[#10B981]/20' : 'bg-transparent text-gray-500'}`}
+                className={`p-3 mr-1 rounded-lg transition-colors ${input.trim() ? 'bg-[#10B981] text-[#090D16] hover:bg-[#059669]' : 'bg-transparent text-gray-600'}`}
               >
-                <Send size={18} />
+                <Send size={18} strokeWidth={2} className={input.trim() ? 'translate-x-0.5' : ''} />
               </button>
             </div>
           </div>
