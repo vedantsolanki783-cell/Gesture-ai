@@ -1,681 +1,242 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Bot,
-  Camera,
-  CameraOff,
-  Check,
-  ChevronDown,
-  Copy,
-  FileText,
-  Loader2,
-  Mic,
-  Paperclip,
-  Send,
-  Settings,
-  Sun,
-  Moon,
-  Trash2,
-  User,
-  X,
-  Zap,
-} from 'lucide-react';
-import type {
-  AppSettings,
-  Message,
-  VisionResult,
-} from './types';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Bot, User, Send, Settings, CameraOff, Sun, Moon, Trash2, Mic, Paperclip, Zap, Camera, Copy, Check } from 'lucide-react';
+import { Message, AppSettings, VisionResponse } from './types';
 import { generateLocalOrCloud } from './services/aiRouter';
-import { SettingsPanel } from './components/SettingsPanel';
-import { CameraView } from './components/CameraView';
+import SettingsPanel from './components/SettingsPanel';
+import CameraView from './components/CameraView';
 import { useVision } from './hooks/useVision';
-import { learnSign } from './vision/localVision';
-import { parseUploadedFile } from './services/fileReader';
-import type { MessageAttachment } from './services/hybridAI';
+import { learnSign, clearTrainedSigns, getTrainedSignsCount } from './vision/localVision';
 
 const defaults: AppSettings = {
-  theme: 'dark',
-  voiceEnabled: true,
-  visionEnabled: false,
-  confidenceThreshold: 0.72,
-  aiProvider: 'ollama',
-  ollamaUrl: 'http://localhost:11434',
-  ollamaModel: 'qwen2.5:0.5b',
-  geminiModel: 'gemini-2.5-flash',
-  cloudFreeBaseUrl: 'https://api.groq.com/openai/v1',
-  cloudFreeApiKey: '',
-  cloudFreeModel: 'llama-3.3-70b-versatile',
-  webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
-  systemInstruction: 'You are NOVA. Answer concisely.',
-  customGestures: [],
+  theme: 'dark', voiceEnabled: true, visionEnabled: false, confidenceThreshold: 0.72,
+  aiProvider: 'ollama', ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen2.5:1.5b',
+  geminiModel: 'gemini-2.5-flash', webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
+  systemInstruction: 'You are NOVA. Answer concisely.', customGestures: []
 };
 
-const WELCOME_MESSAGE = (): Message => ({
-  id: 'welcome',
-  role: 'model',
-  text: 'Hello! How can I assist you today?',
-  timestamp: Date.now(),
-});
-
-function loadSettings(): AppSettings {
-  try {
-    const saved = localStorage.getItem('nova_settings');
-    return saved
-      ? { ...defaults, ...JSON.parse(saved) }
-      : defaults;
-  } catch {
-    return defaults;
-  }
-}
-
 function executeAndroidAgentCommand(rawText: string): string | null {
-  const bridge =
-    typeof window !== 'undefined'
-      ? (window as any).NovaAndroid
-      : null;
-
+  const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
   const text = rawText.toLowerCase().trim();
 
-  const isOverlay =
-    /\b(enable|start|show|turn on)\s+(overlay|bubble|hud)\b/i.test(
-      text,
-    );
-  const isUltron =
-    /\b(enable|open|turn on)\s+(accessibility|ultron)\b/i.test(
-      text,
-    );
+  const isOverlay = /\b(enable|start|show|turn on)\s+(overlay|bubble|hud)\b/i.test(text);
+  const isUltron = /\b(enable|open|turn on)\s+(accessibility|ultron)\b/i.test(text);
   const isHome = /^(go\s+home|home)$/i.test(text);
   const isBack = /^(go\s+back|back)$/i.test(text);
-  const openAppMatch = text.match(
-    /^(?:open|launch)\s+([a-z0-9\s._-]+)$/i,
-  );
+  const openAppMatch = text.match(/^(?:open|launch)\s+([a-z0-9\s._-]+)$/i);
 
-  if (
-    !bridge &&
-    (isOverlay || isUltron || isHome || isBack || openAppMatch)
-  ) {
-    return '⚠️ Android Bridge Not Found.';
-  }
-
-  if (isOverlay) {
-    return bridge.enableOverlayBubble() ===
-      'OPENED_OVERLAY_SETTINGS'
-      ? '⚡ Opening Settings...'
-      : '⚡ Floating Bubble Active!';
-  }
-
-  if (isUltron) {
-    bridge.openAccessibilitySettings();
-    return '🤖 Opening Accessibility Settings...';
-  }
-
-  if (
-    openAppMatch &&
-    bridge.openApp(openAppMatch[1].trim())
-  ) {
-    return `🚀 Launching ${openAppMatch[1].toUpperCase()}...`;
-  }
-
-  if (bridge && !bridge.isUltronConnected()) {
-    bridge.openAccessibilitySettings();
-    return '⚠️ Ultron OFF. Turn it ON.';
-  }
-
-  if (isHome) {
-    bridge.globalAction('HOME');
-    return '🏠 Executed HOME.';
-  }
-
-  if (isBack) {
-    bridge.globalAction('BACK');
-    return '🔙 Executed BACK.';
-  }
-
+  if (!bridge && (isOverlay || isUltron || isHome || isBack || openAppMatch)) return '⚠️ Android Bridge Not Found.';
+  if (isOverlay) return bridge.enableOverlayBubble() === 'OPENED_OVERLAY_SETTINGS' ? '⚡ Opening Settings...' : '⚡ Floating Bubble Active!';
+  if (isUltron) { bridge.openAccessibilitySettings(); return '🤖 Opening Accessibility Settings...'; }
+  if (openAppMatch && bridge.openApp(openAppMatch[1].trim())) return `🚀 Launching ${openAppMatch[1].toUpperCase()}...`;
+  if (bridge && !bridge.isUltronConnected()) { bridge.openAccessibilitySettings(); return '⚠️ Ultron OFF. Turn it ON.'; }
+  if (isHome) { bridge.globalAction('HOME'); return '🏠 Executed HOME.'; }
+  if (isBack) { bridge.globalAction('BACK'); return '🔙 Executed BACK.'; }
   return null;
 }
 
-function getInitialsOrIcon(role: Message['role']) {
-  return role === 'model' ? <Bot size={16} /> : <User size={16} />;
-}
-
 export default function App() {
-  const [settings, setSettings] = useState<AppSettings>(loadSettings);
+  const [settings, setSettings] = useState<AppSettings>(() => {
+    try { return { ...defaults, ...JSON.parse(localStorage.getItem('nova_settings') || '{}') }; } catch { return defaults; }
+  });
+
   const [messages, setMessages] = useState<Message[]>([
-    WELCOME_MESSAGE(),
+    { id: '1', role: 'model', content: 'Hello! How can I assist you today?', timestamp: Date.now() }
   ]);
+  
   const [input, setInput] = useState('');
   const [typing, setTyping] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mlInput, setMlInput] = useState('');
-  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
-  const [lastProvider, setLastProvider] = useState('Ready');
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [attachmentBusy, setAttachmentBusy] = useState(false);
-
   const chatEnd = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    localStorage.setItem(
-      'nova_settings',
-      JSON.stringify(settings),
-    );
-    document.documentElement.classList.toggle(
-      'dark',
-      settings.theme === 'dark',
-    );
+  useEffect(() => { 
+    localStorage.setItem('nova_settings', JSON.stringify(settings)); 
+    document.documentElement.classList.toggle('dark', settings.theme === 'dark');
   }, [settings]);
 
-  useEffect(() => {
-    chatEnd.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, typing]);
+  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, typing]);
 
-  const copyToClipboard = useCallback(
-    async (text: string, id: string) => {
-      try {
-        await navigator.clipboard.writeText(text);
-        setCopiedId(id);
-        window.setTimeout(() => setCopiedId(null), 1200);
-      } catch {
-        // ignore
-      }
-    },
-    [],
-  );
-
-  const handleFileUpload = async (
-    event: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    setAttachmentBusy(true);
+  const copyToClipboard = async (text: string, id: string) => {
     try {
-      const parsed = await parseUploadedFile(file);
-      setAttachments((previous) => [...previous, parsed]);
-    } catch (error) {
-      console.error('File read error:', error);
-    } finally {
-      setAttachmentBusy(false);
-      event.target.value = '';
+      await navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1200);
+    } catch {}
+  };
+
+  const send = useCallback(async (val = input) => {
+    const text = val.trim(); if (!text || typing) return;
+    setMessages(p => [...p, { id: crypto.randomUUID(), role: 'user', content: text, timestamp: Date.now() }]);
+    setInput(''); setTyping(true);
+
+    const androidReply = executeAndroidAgentCommand(text);
+    if (androidReply) {
+      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', content: androidReply, timestamp: Date.now() }]);
+      setTyping(false); return;
     }
-  };
 
-  const removeAttachment = (index: number) => {
-    setAttachments((previous) =>
-      previous.filter((_, itemIndex) => itemIndex !== index),
-    );
-  };
+    try {
+      const res = await generateLocalOrCloud(text, messages, settings);
+      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', content: res.text, timestamp: Date.now() }]);
+    } catch {
+      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', content: '⚠️ Local AI Offline. Open Termux and run `ollama serve`.', timestamp: Date.now() }]);
+    } finally { setTyping(false); }
+  }, [input, messages, settings, typing]);
 
-  const send = useCallback(
-    async (value = input) => {
-      const text = value.trim();
-      if ((!text && attachments.length === 0) || typing) return;
+  const handleGestureDetected = useCallback((result: VisionResponse) => {
+    if (result.type === 'LETTER') setInput(p => p + result.value);
+    else if (result.value === 'CLEAR') setInput('');
+    else if (result.value === 'SEND') send();
+  }, [send]);
 
-      const userMessage: Message = {
-        id: crypto.randomUUID(),
-        role: 'user',
-        text:
-          text ||
-          `Attached ${attachments.length} file${attachments.length > 1 ? 's' : ''}`,
-        timestamp: Date.now(),
-      };
-
-      const historyForAI = messages;
-      const currentAttachments = [...attachments];
-
-      setMessages((previous) => [...previous, userMessage]);
-      setInput('');
-      setAttachments([]);
-      setTyping(true);
-
-      const androidReply = executeAndroidAgentCommand(text);
-
-      if (androidReply) {
-        setMessages((previous) => [
-          ...previous,
-          {
-            id: crypto.randomUUID(),
-            role: 'model',
-            text: androidReply,
-            timestamp: Date.now(),
-          },
-        ]);
-        setLastProvider('Android Agent');
-        setTyping(false);
-        return;
-      }
-
-      try {
-        const response = await generateLocalOrCloud(
-          text,
-          historyForAI,
-          settings,
-          currentAttachments,
-        );
-
-        setMessages((previous) => [
-          ...previous,
-          {
-            id: crypto.randomUUID(),
-            role: 'model',
-            text: response.text,
-            timestamp: Date.now(),
-          },
-        ]);
-        setLastProvider(response.provider);
-      } catch (error) {
-        setMessages((previous) => [
-          ...previous,
-          {
-            id: crypto.randomUUID(),
-            role: 'model',
-            text: `⚠️ NOVA could not reach the selected AI provider.\n\n${String(
-              error,
-            )}`,
-            timestamp: Date.now(),
-          },
-        ]);
-        setLastProvider('Error');
-      } finally {
-        setTyping(false);
-      }
-    },
-    [attachments, input, messages, settings, typing],
-  );
-
-  const handleGestureDetected = useCallback(
-    (result: VisionResult) => {
-      if (result.type === 'LETTER') {
-        setInput((previous) => previous + result.value);
-      } else if (result.value === 'CLEAR') {
-        setInput('');
-      } else if (result.value === 'SEND') {
-        void send();
-      }
-    },
-    [send],
-  );
-
-  const vision = useVision(
-    settings,
-    settings.customGestures,
-    handleGestureDetected,
-  );
-
-  const clearChat = () => {
-    setMessages([WELCOME_MESSAGE()]);
-    setLastProvider('Ready');
-  };
-
-  const modelLabel =
-    settings.aiProvider === 'webllm'
-      ? settings.webllmModel
-      : settings.aiProvider === 'gemini'
-        ? settings.geminiModel
-        : settings.aiProvider === 'cloudFree'
-          ? settings.cloudFreeModel
-          : settings.ollamaModel;
-
-  const visionStatus =
-    vision.status === 'local'
-      ? 'Local vision active'
-      : vision.status === 'starting'
-        ? 'Starting camera…'
-        : vision.status === 'cloud'
-          ? 'Cloud vision fallback'
-          : vision.status === 'model-missing'
-            ? 'Vision model missing'
-            : vision.status === 'error'
-              ? 'Camera unavailable'
-              : 'Vision offline';
-
-  const isOnlineVision =
-    vision.status === 'local' || vision.status === 'cloud';
+  const vision = useVision(settings, settings.customGestures, handleGestureDetected);
 
   return (
-    <div className="nova-app">
-      <header className="nova-header">
-        <div className="nova-brand">
-          <div className="nova-logo" aria-hidden="true">
-            <Zap size={19} fill="currentColor" />
+    <div className="flex flex-col h-screen bg-[#090D16] text-gray-100 font-sans overflow-hidden">
+      
+      {/* Header matching Image 2 */}
+      <header className="flex items-center justify-between px-4 py-3 bg-[#090D16] shrink-0 border-b border-gray-800/40">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-full border border-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.4)] flex items-center justify-center bg-black/50">
+            <Zap size={18} fill="currentColor" className="text-yellow-400" />
           </div>
-          <div className="nova-brand-copy">
-            <div className="nova-title">NOVA GESTURE AI</div>
-            <div className="nova-subtitle">
-              <span className="status-dot" />
-              <span>JARVIS + ULTRON CANVAS</span>
-              <span className="separator">·</span>
-              <span>Local</span>
-              <span className="separator">·</span>
-              <span className="model-label">{modelLabel}</span>
-            </div>
+          <div>
+            <h1 className="font-bold text-xs tracking-widest text-white uppercase">NOVA GESTURE AI</h1>
+            <p className="text-[10px] text-gray-400 flex items-center gap-1.5 font-medium tracking-wide">
+              <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full inline-block"></span> 
+              JARVIS + ULTRON CANVAS · Local · {settings.ollamaModel}
+            </p>
           </div>
         </div>
-
-        <div className="header-actions">
-          <button
-            className={`header-button ${
-              settings.visionEnabled ? 'is-active' : ''
-            }`}
-            onClick={() =>
-              setSettings((previous) => ({
-                ...previous,
-                visionEnabled: !previous.visionEnabled,
-              }))
-            }
-            aria-label="Toggle camera"
-            title="Toggle camera"
-          >
-            {settings.visionEnabled ? (
-              <Camera size={18} />
-            ) : (
-              <CameraOff size={18} />
-            )}
+        <div className="flex items-center gap-1">
+          <button onClick={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} className="p-2 hover:bg-[#1E293B] rounded-lg text-gray-400 transition-colors">
+            {settings.visionEnabled ? <Camera size={18} className="text-[#10B981]" /> : <CameraOff size={18} />}
           </button>
-          <button
-            className="header-button"
-            onClick={() =>
-              setSettings((previous) => ({
-                ...previous,
-                theme:
-                  previous.theme === 'dark' ? 'light' : 'dark',
-              }))
-            }
-            aria-label="Toggle theme"
-            title="Toggle theme"
-          >
-            {settings.theme === 'dark' ? (
-              <Sun size={18} />
-            ) : (
-              <Moon size={18} />
-            )}
+          <button onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))} className="p-2 hover:bg-[#1E293B] rounded-lg text-gray-400 transition-colors">
+            {settings.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
           </button>
-          <button
-            className="header-button"
-            onClick={() => setSettingsOpen(true)}
-            aria-label="Open settings"
-            title="Settings"
-          >
+          <button onClick={() => setSettingsOpen(true)} className="p-2 hover:bg-[#1E293B] rounded-lg text-gray-400 transition-colors">
             <Settings size={18} />
           </button>
         </div>
       </header>
 
-      <main className="nova-shell">
-        <section
-          className={`vision-card ${
-            settings.visionEnabled ? 'vision-enabled' : 'vision-disabled-card'
-          }`}
-        >
+      <main className="flex-1 flex flex-col p-3 gap-3 overflow-hidden max-w-4xl mx-auto w-full">
+        
+        {/* Top Camera Block matching Image 2 */}
+        <div className={`flex-shrink-0 bg-[#121927] rounded-2xl border border-gray-800/60 flex items-center justify-center relative overflow-hidden transition-all duration-300 ${settings.visionEnabled ? 'h-48' : 'h-36'}`}>
           {settings.visionEnabled ? (
-            <>
-              <CameraView
-                videoRef={vision.videoRef}
-                enabled={settings.visionEnabled}
-                status={vision.status}
-                lastDetection={vision.lastDetection}
-                onToggle={() =>
-                  setSettings((previous) => ({
-                    ...previous,
-                    visionEnabled: !previous.visionEnabled,
-                  }))
-                }
-                settings={settings}
-              />
-
-              <div className="vision-trainer">
-                <input
-                  value={mlInput}
-                  onChange={(event) =>
-                    setMlInput(event.target.value.toUpperCase())
-                  }
-                  placeholder="Sign (A-Z)"
-                  maxLength={20}
-                  aria-label="Custom sign label"
-                />
-                <button
-                  onClick={() => {
-                    if (!mlInput.trim()) return;
-                    learnSign(mlInput);
-                    setMlInput('');
-                  }}
-                >
-                  Learn
-                </button>
-              </div>
-
-              <div className="vision-status-pill">
-                <span className={isOnlineVision ? 'live-dot' : 'idle-dot'} />
-                {visionStatus}
-              </div>
-            </>
+            <div className="w-full h-full relative flex items-center justify-center">
+              <CameraView videoRef={vision.videoRef} enabled={settings.visionEnabled} status={vision.status} lastDetection={vision.lastDetection} onToggle={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} settings={settings} />
+            </div>
           ) : (
-            <div className="vision-offline">
-              <div className="offline-camera-icon">
-                <CameraOff size={34} />
-              </div>
-              <div className="vision-offline-title">Vision is offline</div>
-              <div className="vision-offline-subtitle">
-                Enable the camera to use hand-gesture control and the wireless mouse.
-              </div>
-              <button
-                className="enable-camera-button"
-                onClick={() =>
-                  setSettings((previous) => ({
-                    ...previous,
-                    visionEnabled: true,
-                  }))
-                }
-              >
+            <div className="flex flex-col items-center gap-3">
+              <CameraOff size={32} strokeWidth={1.5} className="text-gray-500" />
+              <span className="text-gray-400 text-xs font-medium">Vision is offline</span>
+              <button onClick={() => setSettings(s => ({...s, visionEnabled: true}))} className="px-4 py-1.5 bg-[#10B981] text-black font-bold text-xs rounded-full shadow hover:bg-[#059669] transition-colors">
                 Enable camera
               </button>
             </div>
           )}
-        </section>
 
-        <section className="assistant-card">
-          <div className="assistant-header">
-            <div className="assistant-heading">
-              <div className="assistant-title-row">
-                <div className="assistant-mini-icon">
-                  <Bot size={14} />
-                </div>
-                <div className="assistant-title">Assistant</div>
-              </div>
-              <div className="assistant-subtitle">
-                Jarvis + Ultron Generative Core
-              </div>
-            </div>
-
-            <div className="assistant-header-right">
-              <span className="provider-chip" title={lastProvider}>
-                <span className="provider-dot" />
-                {lastProvider}
-                <ChevronDown size={11} />
-              </span>
-              <button
-                className="clear-button"
-                onClick={clearChat}
-                title="Clear chat"
-              >
-                <Trash2 size={13} />
-                <span>Clear</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="messages-container">
-            <div className="messages-inner">
-              {messages.map((message) => (
-                <div
-                  key={message.id}
-                  className={`message-row ${
-                    message.role === 'user'
-                      ? 'user-row'
-                      : 'model-row'
-                  }`}
-                >
-                  {message.role === 'model' && (
-                    <div className="message-avatar model-avatar">
-                      {getInitialsOrIcon(message.role)}
-                    </div>
-                  )}
-
-                  <div className="message-column">
-                    <div className="message-label">
-                      {message.role === 'model' ? 'NOVA' : 'You'}
-                    </div>
-                    <div className="message-bubble">
-                      {message.text}
-                    </div>
-                    {message.role === 'model' && (
-                      <button
-                        className="copy-message"
-                        onClick={() =>
-                          void copyToClipboard(message.text, message.id)
-                        }
-                        title="Copy response"
-                      >
-                        {copiedId === message.id ? (
-                          <>
-                            <Check size={12} />
-                            Copied
-                          </>
-                        ) : (
-                          <>
-                            <Copy size={12} />
-                            Copy
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-
-                  {message.role === 'user' && (
-                    <div className="message-avatar user-avatar">
-                      {getInitialsOrIcon(message.role)}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              {typing && (
-                <div className="message-row model-row">
-                  <div className="message-avatar model-avatar">
-                    <Bot size={16} />
-                  </div>
-                  <div className="message-column">
-                    <div className="message-label">NOVA</div>
-                    <div className="typing-bubble" aria-label="NOVA is thinking">
-                      <span />
-                      <span />
-                      <span />
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div ref={chatEnd} />
-            </div>
-          </div>
-
-          {attachments.length > 0 && (
-            <div className="attachment-strip">
-              {attachments.map((attachment, index) => (
-                <div className="attachment-chip" key={`${attachment.name}-${index}`}>
-                  <FileText size={13} />
-                  <span>{attachment.name}</span>
-                  <button
-                    onClick={() => removeAttachment(index)}
-                    title="Remove attachment"
-                    aria-label={`Remove ${attachment.name}`}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
+          {settings.visionEnabled && (
+            <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 flex items-center gap-2 z-10">
+              <input value={mlInput} onChange={e => setMlInput(e.target.value.toUpperCase())} placeholder="Sign (A-Z)" className="w-20 bg-transparent border-b border-gray-500 text-[11px] text-white outline-none uppercase pb-0.5" />
+              <button onClick={() => { learnSign(mlInput); setMlInput(''); }} className="bg-[#10B981] text-black text-[10px] font-bold px-2 py-0.5 rounded">Learn</button>
             </div>
           )}
+        </div>
 
-          <div className="composer-area">
-            <div className="composer-box">
-              <button
-                className="composer-icon-button"
-                onClick={() => fileInputRef.current?.click()}
-                title="Attach a file"
-                aria-label="Attach a file"
-                disabled={attachmentBusy}
-              >
-                {attachmentBusy ? (
-                  <Loader2 size={18} className="spin" />
-                ) : (
-                  <Paperclip size={19} />
-                )}
-              </button>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                hidden
-                accept=".txt,.md,.json,.csv,.js,.ts,.tsx,.py,.html,.css,.pdf,.png,.jpg,.jpeg,.webp"
-                onChange={handleFileUpload}
-              />
-
-              <textarea
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === 'Enter' &&
-                    !event.shiftKey
-                  ) {
-                    event.preventDefault();
-                    void send();
-                  }
-                }}
-                placeholder="Ask anything..."
-                rows={1}
-                aria-label="Message NOVA"
-              />
-
-              <button
-                className={`send-button ${
-                  input.trim() || attachments.length > 0
-                    ? 'ready'
-                    : ''
-                }`}
-                onClick={() => void send()}
-                disabled={
-                  typing ||
-                  (!input.trim() && attachments.length === 0)
-                }
-                title="Send message"
-                aria-label="Send message"
-              >
-                <Send size={18} />
-              </button>
+        {/* Chat Section matching Image 2 */}
+        <div className="flex-1 bg-[#090D16] rounded-2xl border border-gray-800/60 flex flex-col overflow-hidden relative">
+          
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800/60 bg-[#0C111D] shrink-0">
+            <div>
+              <h2 className="text-xs font-bold text-white">Assistant</h2>
+              <p className="text-[10px] text-gray-500">Jarvis + Ultron Generative Core</p>
             </div>
+            <button onClick={() => setMessages([{ id: '1', role: 'model', content: 'Hello! How can I assist you today?', timestamp: Date.now() }])} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-white px-3 py-1 bg-[#1E293B] rounded-lg border border-gray-700/50 transition-colors">
+              <Trash2 size={12} /> Clear
+            </button>
+          </div>
 
-            <div className="composer-footer">
-              <span>
-                Enter to send · Shift + Enter for a new line
-              </span>
-              <span className="gesture-hint">
-                🖐 Gesture control {settings.visionEnabled ? 'ON' : 'OFF'}
-              </span>
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {messages.map(m => (
+              <div key={m.id} className={`flex items-start gap-3 w-full ${m.role === 'user' ? 'justify-end' : ''}`}>
+                
+                {m.role === 'model' && (
+                  <>
+                    <div className="w-7 h-7 rounded-full bg-[#10B981]/10 flex items-center justify-center flex-shrink-0 text-[#10B981]">
+                      <Bot size={15} strokeWidth={1.5} />
+                    </div>
+                    <div>
+                      <div className="px-4 py-3 rounded-2xl rounded-tl-none max-w-full text-xs leading-relaxed bg-[#1E293B] text-gray-200 shadow-sm border border-gray-700/30">
+                        <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+                      </div>
+                      <button onClick={() => copyToClipboard(m.content, m.id)} className="text-gray-500 hover:text-gray-300 mt-1 ml-1 p-0.5 flex items-center gap-1 text-[10px]">
+                        {copiedId === m.id ? <Check size={11} className="text-[#10B981]" /> : <Copy size={11} />}
+                        {copiedId === m.id ? 'Copied' : ''}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {m.role === 'user' && (
+                  <>
+                    <div className="px-4 py-3 rounded-2xl rounded-tr-none max-w-[75%] text-xs leading-relaxed bg-[#10B981] text-[#090D16] font-medium shadow-sm">
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
+                    </div>
+                    <div className="w-7 h-7 rounded-lg bg-[#10B981] flex items-center justify-center flex-shrink-0 text-[#090D16]">
+                      <User size={15} strokeWidth={2} />
+                    </div>
+                  </>
+                )}
+
+              </div>
+            ))}
+
+            {/* Thinking Animation */}
+            {typing && (
+              <div className="flex items-start gap-3 w-full">
+                <div className="w-7 h-7 rounded-full bg-[#10B981]/10 flex items-center justify-center flex-shrink-0 text-[#10B981]">
+                  <Bot size={15} strokeWidth={1.5} />
+                </div>
+                <div className="bg-[#1E293B] px-4 py-3 rounded-2xl rounded-tl-none flex items-center gap-1.5 shadow-sm border border-gray-700/30">
+                  <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-bounce"></span>
+                  <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
+                  <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
+                </div>
+              </div>
+            )}
+            <div ref={chatEnd} />
+          </div>
+
+          {/* Input Bar matching Image 2 */}
+          <div className="p-3 bg-[#0C111D] shrink-0">
+            <div className="flex items-center gap-2 bg-[#121927] rounded-xl p-1.5 border border-gray-800">
+              <button className="p-2 text-gray-400 hover:text-white transition-colors"><Mic size={18} /></button>
+              <button className="p-2 text-gray-400 hover:text-white transition-colors"><Paperclip size={18} /></button>
+              <input 
+                value={input} 
+                onChange={e => setInput(e.target.value)} 
+                onKeyDown={e => e.key === 'Enter' && send()} 
+                placeholder="Ask anything, 'make presentation on...', 'build calculator in html'..." 
+                className="flex-1 bg-transparent border-none text-xs text-white placeholder-gray-500 outline-none px-1" 
+              />
+              <button 
+                onClick={() => send()} 
+                disabled={!input.trim() || typing} 
+                className={`p-2.5 rounded-lg transition-colors ${input.trim() ? 'bg-[#10B981] text-[#090D16] hover:bg-[#059669]' : 'bg-transparent text-gray-600'}`}
+              >
+                <Send size={16} strokeWidth={2} className={input.trim() ? 'translate-x-0.5' : ''} />
+              </button>
             </div>
           </div>
-        </section>
+        </div>
       </main>
 
-      {settingsOpen && (
-        <SettingsPanel
-          settings={settings}
-          onUpdate={setSettings}
-          onClose={() => setSettingsOpen(false)}
-        />
-      )}
+      <SettingsPanel isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} onSave={setSettings} />
     </div>
   );
 }
-
