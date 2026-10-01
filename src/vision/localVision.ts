@@ -9,7 +9,6 @@ const MODEL_PATH = httpsUrl(
 
 const HOLD_DELAY_MS = 500;
 const POST_EMIT_LOCK_MS = 1200;
-const MAX_FINGER_VELOCITY = 0.035;
 
 // Palm-Ray Mouse Tuning
 const PINCH_THRESH = 0.055;
@@ -19,7 +18,7 @@ let prevTargetX = 0.5, prevTargetY = 0.5;
 let landmarkerPromise: Promise<HandLandmarker> | null = null;
 let lastVideoTime = -1;
 let mouselessMode = false;
-let lastToggleTime = 0, lastClickTime = 0, lastScrollTime = 0;
+let lastToggleTime = 0, lastClickTime = 0;
 
 let candidateSign = '', latchedSign = '';
 let candidateStartTime = 0, lastEmittedTime = 0;
@@ -134,17 +133,20 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Palm-Ray Mouse Engine
+    // AGI Palm-Ray Mouse Engine (Mirroring Fix Applied)
     if (mouselessMode) {
       const h = hands[0];
-      const rayX = 1.0 - (h[5].x * 0.65 + h[8].x * 0.35); // Knuckle Anchor
-      const rayY = h[5].y * 0.65 + h[8].y * 0.35;
+      
+      // Removed the '1 -' math. The raw MediaPipe X aligns perfectly with the mirrored HTML video preview.
+      const rayX = (h[5].x * 0.65 + h[8].x * 0.35); 
+      const rayY = (h[5].y * 0.65 + h[8].y * 0.35);
       
       const normX = Math.max(0.01, Math.min(0.99, (rayX - 0.15) / 0.7));
       const normY = Math.max(0.01, Math.min(0.99, (rayY - 0.15) / 0.7));
 
       const vel = Math.hypot(normX - prevTargetX, normY - prevTargetY);
       prevTargetX = normX; prevTargetY = normY;
+      
       const alpha = vel < 0.005 ? 0.15 : vel > 0.05 ? 0.8 : 0.4;
       filteredX = filteredX * (1 - alpha) + normX * alpha;
       filteredY = filteredY * (1 - alpha) + normY * alpha;
@@ -171,7 +173,6 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Hybrid Inference: Try ML first, fallback to ASL rules
     let sign = classifyWithML(vector) || classifyASL(hands[0]);
 
     if (!sign) {
