@@ -1,4 +1,5 @@
 import type { Message, AppSettings } from '../types';
+import type { MessageAttachment } from './hybridAI';
 import { chatWebLLM } from './webllm';
 
 function ollamaUrl(base: string) {
@@ -13,15 +14,34 @@ function systemPrompt(settings: AppSettings) {
   return `${settings.systemInstruction}\n\nYou are the language/assistant layer of NOVA Gesture AI. Keep responses concise and useful. Do not invent sign-language detections; the vision layer reports gestures separately.`;
 }
 
+function attachmentsToPrompt(attachments?: MessageAttachment[]): string {
+  if (!attachments?.length) return '';
+  const MAX_CHARS = 8000;
+  return attachments.map((attachment) => {
+    if (attachment.type === 'text') {
+      const content = attachment.content.length > MAX_CHARS
+        ? `${attachment.content.slice(0, MAX_CHARS)}\n…(truncated)`
+        : attachment.content;
+      return `\n\n--- Attached file: ${attachment.name} ---\n${content}\n--- End of ${attachment.name} ---`;
+    }
+    if (attachment.type === 'pdf') {
+      return `\n\n[Attached PDF: ${attachment.name}. This provider can only use extracted text when available.]`;
+    }
+    return `\n\n[Attached image: ${attachment.name}. Use a vision-capable provider to inspect the image.]`;
+  }).join('');
+}
+
 export async function generateLocalOrCloud(
   text: string,
   history: Message[],
-  settings: AppSettings
+  settings: AppSettings,
+  attachments?: MessageAttachment[]
 ): Promise<{ text: string; provider: string }> {
+  const userContent = text + attachmentsToPrompt(attachments);
   const messages = [
     { role: 'system', content: systemPrompt(settings) },
     ...history.slice(-12).map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.text })),
-    { role: 'user', content: text }
+    { role: 'user', content: userContent }
   ];
 
   const tryOllama = async () => {
@@ -58,9 +78,17 @@ export async function generateLocalOrCloud(
   const tryGemini = async () => {
     const key = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
     if (!key) throw new Error('VITE_GEMINI_API_KEY is not configured');
+    const imageParts = (attachments || [])
+      .filter((attachment) => attachment.type === 'image')
+      .map((attachment) => ({
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: attachment.content.split(',')[1] || attachment.content,
+        },
+      }));
     const contents = [
       ...history.slice(-12).map(m => ({ role: m.role === 'model' ? 'model' : 'user', parts: [{ text: m.text }] })),
-      { role: 'user', parts: [{ text }] }
+      { role: 'user', parts: [{ text: userContent }, ...imageParts] }
     ];
     const response = await fetch(geminiUrl(settings.geminiModel, key), {
       method: 'POST',
@@ -92,7 +120,6 @@ export async function generateLocalOrCloud(
     catch (e) { return { text: `On-device AI error: ${String(e)}`, provider: 'On-device error' }; }
   }
 
-  // Auto: local Ollama first (if running), then the free-tier cloud key, then Gemini.
   try { return { text: await tryOllama(), provider: `Local • ${settings.ollamaModel}` }; }
   catch {
     try { return { text: await tryCloudFree(), provider: `Cloud (free tier) • ${settings.cloudFreeModel}` }; }
@@ -106,7 +133,7 @@ export async function generateLocalOrCloud(
 export async function analyzeWithGemini(base64: string, settings: AppSettings, customGestures: AppSettings['customGestures']): Promise<string> {
   const key = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
   if (!key) throw new Error('VITE_GEMINI_API_KEY is not configured');
-  const prompt = `Analyze this mirrored webcam image for a hand gesture. Recognize ASL static letters A, B, C, L, V, Y and these controls: THEME_SWITCH (open palm), CLEAR (thumb down). Custom gestures: ${customGestures.map(g => `${g.name}: ${g.description}`).join('; ')}. Return ONLY JSON like {"type":"LETTER|GESTURE|UNKNOWN","value":"A","confidence":0.0}. Do not guess.`;
+  const prompt = `Analyze this mirrored webcam image for a hand gesture. Recognize ASL static letters A, B, C, L, V, Y and these controls: THEME_SWITCH (open palm), CLEAR (thumb down). Custom gestures: ${customGestures.map(g => `${g.name}:${g.description}`).join('; ')}. Return ONLY JSON like {"type":"LETTER|GESTURE|UNKNOWN","value":"A","confidence":0.0}. Do not guess.`;
   const response = await fetch(geminiUrl(settings.geminiModel, key), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/jpeg', data: base64.split(',')[1] || base64 } }, { text: prompt }] }], generationConfig: { responseMimeType: 'application/json' } })
