@@ -1,14 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bot, User, Send, Settings, Sparkles, BrainCircuit, Plus, MessageSquare, Trash2, Menu, Camera, Sun, Moon, X, Loader2, Zap } from 'lucide-react';
+import { User, Send, Settings, Sparkles, Camera, Cpu, X, Save, Volume2, VolumeX, Loader2, Trash2 } from 'lucide-react';
 import { learnSign, clearTrainedSigns, getTrainedSignsCount, localVision } from './vision/localVision';
 import './styles.css';
 
-// ============================================================================
-// TYPES & SYSTEM COMMANDS
-// ============================================================================
-interface Message { id: string; role: 'user' | 'model'; text: string; timestamp: number; }
-interface ChatSession { id: string; title: string; messages: Message[]; }
-interface AppSettings { theme: 'light' | 'dark'; visionEnabled: boolean; ollamaModel: string; systemInstruction: string; }
+interface Message { id: string; role: 'user' | 'model'; content: string; timestamp: number; }
+interface AppSettings { theme: 'light' | 'dark'; voiceEnabled: boolean; ollamaModel: string; systemInstruction: string; }
 
 function executeAndroidAgentCommand(rawText: string): string | null {
   const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
@@ -18,108 +14,65 @@ function executeAndroidAgentCommand(rawText: string): string | null {
   const isUltron = /\b(enable|open|turn on)\s+(accessibility|ultron)\b/i.test(text);
   const isHome = /^(go\s+home|home)$/i.test(text);
   const isBack = /^(go\s+back|back)$/i.test(text);
-  const isRecents = /^(open\s+recents|recents)$/i.test(text);
-  const isNotif = /^(open\s+notifications|notifications)$/i.test(text);
   const openAppMatch = text.match(/^(?:open|launch)\s+([a-z0-9\s._-]+)$/i);
 
-  if (!bridge && (isOverlay || isUltron || isHome || isBack || openAppMatch)) {
-    return '⚠️ **Hardware Bridge Disconnected:** Compile the APK to execute system-level AGI overrides.';
-  }
-
-  if (isOverlay) return bridge.enableOverlayBubble() === 'OPENED_OVERLAY_SETTINGS' ? '⚡ Initializing AGI HUD Settings...' : '⚡ AGI Floating HUD Online.';
-  if (isUltron) { bridge.openAccessibilitySettings(); return '🤖 Bypassing Android Security... Turn ON Ultron in Settings.'; }
-  if (openAppMatch && bridge.openApp(openAppMatch[1].trim())) return `🚀 Executing Launch Sequence: **${openAppMatch[1].toUpperCase()}**...`;
-  
-  if (bridge && !bridge.isUltronConnected()) {
-    bridge.openAccessibilitySettings();
-    return '⚠️ Ultron Agent Core offline. Require Accessibility permission to proceed.';
-  }
-
-  if (isHome) { bridge.globalAction('HOME'); return '🏠 Executed: **HOME**.'; }
-  if (isBack) { bridge.globalAction('BACK'); return '🔙 Executed: **BACK**.'; }
-  if (isRecents) { bridge.globalAction('RECENTS'); return '🗂️ Executed: **RECENTS**.'; }
-  if (isNotif) { bridge.globalAction('NOTIFICATIONS'); return '🔔 Executed: **NOTIFICATIONS**.'; }
-
+  if (!bridge && (isOverlay || isUltron || isHome || isBack || openAppMatch)) return '⚠️ Android Bridge Not Found.';
+  if (isOverlay) return bridge.enableOverlayBubble() === 'OPENED_OVERLAY_SETTINGS' ? '⚡ Opening Settings...' : '⚡ Floating Bubble Active!';
+  if (isUltron) { bridge.openAccessibilitySettings(); return '🤖 Opening Accessibility Settings...'; }
+  if (openAppMatch && bridge.openApp(openAppMatch[1].trim())) return `🚀 Launching ${openAppMatch[1].toUpperCase()}...`;
+  if (bridge && !bridge.isUltronConnected()) { bridge.openAccessibilitySettings(); return '⚠️ Ultron OFF. Turn it ON.'; }
+  if (isHome) { bridge.globalAction('HOME'); return '🏠 Executed HOME.'; }
+  if (isBack) { bridge.globalAction('BACK'); return '🔙 Executed BACK.'; }
   return null;
 }
 
-// ============================================================================
-// MAIN APPLICATION
-// ============================================================================
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => {
-    try { 
-      return { 
-        theme: 'dark', visionEnabled: false, ollamaModel: 'qwen2.5:0.5b', 
-        systemInstruction: 'You are NOVA, an advanced Artificial General Intelligence (AGI). You operate with absolute professionalism, extreme logical precision, and self-improving cognitive loops. You manage the user\'s local device via Ultron and answer queries autonomously.',
-        ...JSON.parse(localStorage.getItem('nova_settings') || '{}') 
-      }; 
-    } 
-    catch { return { theme: 'dark', visionEnabled: false, ollamaModel: 'qwen2.5:0.5b', systemInstruction: '' }; }
+    const saved = localStorage.getItem('ai_settings');
+    const defaults: AppSettings = { theme: 'dark', voiceEnabled: true, ollamaModel: 'qwen2.5:0.5b', systemInstruction: 'You are GestureGenius AI.' };
+    return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
   });
 
-  const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    try { return JSON.parse(localStorage.getItem('nova_sessions') || '[]'); } 
-    catch { return []; }
-  });
-
-  const [sessionId, setSessionId] = useState(() => sessions[0]?.id || crypto.randomUUID());
-  const [messages, setMessages] = useState<Message[]>(() => sessions[0]?.messages || [
-    { id: '1', role: 'model', text: '⚡ **NOVA AGI Core: ONLINE**\n\nSystems calibrated. Advanced neural vision and local reasoning engines are standing by. How shall we proceed?', timestamp: Date.now() }
+  const [messages, setMessages] = useState<Message[]>([
+    { id: '1', role: 'model', content: "Hello! I am your GestureGenius AI. \n\nI can read Sign Language (ASL) and respond to air gestures.\n\n  Show me 'A', 'B', 'C' to type.\n  Pinch your fingers to use the Wireless Mouse.\n  Show 'Thumb Down' to clear text.", timestamp: Date.now() }
   ]);
-  
   const [input, setInput] = useState('');
-  const [typing, setTyping] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [isCameraActive, setIsCameraActive] = useState(false);
   
+  // Settings Panel Local State
+  const [localSettings, setLocalSettings] = useState(settings);
   const [mlInput, setMlInput] = useState('');
   const [mlCount, setMlCount] = useState(0);
-  
-  const chatEnd = useRef<HTMLDivElement>(null);
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  
   const inputRef = useRef(input);
   const sendRef = useRef<() => void>(() => {});
 
   useEffect(() => { inputRef.current = input; }, [input]);
-  useEffect(() => { localStorage.setItem('nova_settings', JSON.stringify(settings)); document.documentElement.dataset.theme = settings.theme; }, [settings]);
-  useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, typing]);
-
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isTyping]);
   useEffect(() => {
-    setSessions(prev => {
-      const idx = prev.findIndex(s => s.id === sessionId);
-      const title = messages.find(m => m.role === 'user')?.text.slice(0, 24) || 'New Chat';
-      const updated = idx >= 0 ? [...prev] : [{ id: sessionId, title, messages }, ...prev];
-      if (idx >= 0) { updated[idx].messages = messages; updated[idx].title = updated[idx].title === 'New Chat' ? title : updated[idx].title; }
-      localStorage.setItem('nova_sessions', JSON.stringify(updated));
-      return updated;
-    });
-  }, [messages, sessionId]);
+    localStorage.setItem('ai_settings', JSON.stringify(settings));
+    if (settings.theme === 'dark') document.documentElement.classList.add('dark');
+    else document.documentElement.classList.remove('dark');
+  }, [settings]);
 
-  useEffect(() => {
-    try { setTimeout(() => setMlCount(getTrainedSignsCount()), 500); } catch {}
-  }, []);
+  useEffect(() => { if (showSettings) { setLocalSettings(settings); setMlCount(getTrainedSignsCount()); } }, [showSettings, settings]);
 
-  const newChat = () => { setSessionId(crypto.randomUUID()); setMessages([{ id: crypto.randomUUID(), role: 'model', text: '⚡ **NOVA AGI Core: ONLINE**\n\nSystems calibrated. Awaiting instruction.', timestamp: Date.now() }]); };
-  const loadChat = (s: ChatSession) => { setSessionId(s.id); setMessages(s.messages); if(window.innerWidth < 768) setDrawerOpen(false); };
-  const delChat = (id: string, e: React.MouseEvent) => {
-    e.stopPropagation(); const rem = sessions.filter(s => s.id !== id); setSessions(rem);
-    if (sessionId === id) { if (rem.length) loadChat(rem[0]); else newChat(); }
-  };
+  const handleSendMessage = async () => {
+    const text = inputRef.current.trim();
+    if (!text || isTyping) return;
 
-  const send = async () => {
-    const text = inputRef.current.trim(); 
-    if (!text || typing) return;
-    
-    setMessages(p => [...p, { id: crypto.randomUUID(), role: 'user', text, timestamp: Date.now() }]);
-    setInput(''); 
-    setTyping(true);
+    setMessages(prev => [...prev, { id: Date.now().toString(), role: 'user', content: text, timestamp: Date.now() }]);
+    setInput('');
+    setIsTyping(true);
 
     const androidReply = executeAndroidAgentCommand(text);
     if (androidReply) {
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: androidReply, timestamp: Date.now() }]);
-      setTyping(false); 
+      setMessages(p => [...p, { id: Date.now().toString(), role: 'model', content: androidReply, timestamp: Date.now() }]);
+      setIsTyping(false);
       return;
     }
 
@@ -131,22 +84,22 @@ export default function App() {
           model: settings.ollamaModel,
           messages: [
             { role: 'system', content: settings.systemInstruction },
-            ...messages, 
-            { role: 'user', text }
-          ].map(m => ({ role: m.role === 'model' ? 'assistant' : m.role, content: m.text || m.content })),
+            ...messages.map(m => ({ role: m.role === 'model' ? 'assistant' : 'user', content: m.content })),
+            { role: 'user', content: text }
+          ],
           stream: false
         })
       });
       const data = await res.json();
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: data.message.content, timestamp: Date.now() }]);
+      setMessages(p => [...p, { id: Date.now().toString(), role: 'model', content: data.message.content, timestamp: Date.now() }]);
     } catch {
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', text: '⚠️ **AGI Core Offline.**\nLocal reasoning engine not detected. Open Termux and execute `ollama serve` to restore autonomy.', timestamp: Date.now() }]);
-    } finally { 
-      setTyping(false); 
+      setMessages(p => [...p, { id: Date.now().toString(), role: 'model', content: '⚠️ Offline AI Not Reachable. Open Termux and run `ollama serve`.', timestamp: Date.now() }]);
+    } finally {
+      setIsTyping(false);
     }
   };
 
-  useEffect(() => { sendRef.current = send; }, [messages, typing, settings]);
+  useEffect(() => { sendRef.current = handleSendMessage; }, [messages, isTyping, settings]);
 
   useEffect(() => {
     let isRunning = true;
@@ -156,162 +109,158 @@ export default function App() {
       if (!isRunning || !videoRef.current) return;
       try {
         const res = await localVision(videoRef.current, performance.now());
-        if (res.type === 'LETTER' && res.value) {
-          setInput(p => p + res.value);
-        } else if (res.value === 'CLEAR') {
-          setInput('');
-        } else if (res.value === 'SEND') {
-          sendRef.current();
-        }
+        if (res.type === 'LETTER' && res.value) setInput(p => p + res.value);
+        else if (res.value === 'CLEAR') setInput('');
+        else if (res.value === 'SEND') sendRef.current();
       } catch (e) {}
       reqId = requestAnimationFrame(runVision);
     };
 
-    if (settings.visionEnabled) {
+    if (isCameraActive) {
       navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 320, height: 240 } })
-        .then(stream => {
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            runVision();
-          }
-        }).catch(() => alert("Camera permission denied."));
+        .then(stream => { if (videoRef.current) { videoRef.current.srcObject = stream; runVision(); } })
+        .catch(() => alert("Camera permission denied."));
     } else {
       if (videoRef.current?.srcObject) {
         (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
         videoRef.current.srcObject = null;
       }
     }
-
-    return () => {
-      isRunning = false;
-      cancelAnimationFrame(reqId);
-      if (videoRef.current?.srcObject) {
-        (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop());
-      }
-    };
-  }, [settings.visionEnabled]);
+    return () => { isRunning = false; cancelAnimationFrame(reqId); if (videoRef.current?.srcObject) (videoRef.current.srcObject as MediaStream).getTracks().forEach(t => t.stop()); };
+  }, [isCameraActive]);
 
   return (
-    <div className="flex h-screen bg-gray-50 dark:bg-[#0a0a0a] text-gray-800 dark:text-gray-100 font-sans overflow-hidden">
+    <div className="flex flex-col h-screen overflow-hidden bg-gradient-to-br from-indigo-100 via-purple-50 to-pink-100 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800 transition-colors duration-500">
       
-      {/* Sidebar */}
-      <aside className={`${drawerOpen ? 'w-72' : 'w-0'} transition-all duration-300 bg-white dark:bg-[#121212] border-r border-gray-200 dark:border-gray-800 flex flex-col overflow-hidden shrink-0 z-20`}>
-        <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
-          <span className="font-bold text-sm tracking-widest uppercase text-gray-400">AGI Sessions</span>
-          <button onClick={newChat} className="p-1.5 bg-blue-600/10 text-blue-600 dark:text-blue-400 hover:bg-blue-600/20 rounded-md transition-colors"><Plus size={16} /></button>
-        </div>
-        
-        <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
-          {sessions.map(s => (
-            <div key={s.id} onClick={() => loadChat(s)} className={`flex items-center justify-between p-3 rounded-lg cursor-pointer text-sm font-medium transition-colors ${s.id === sessionId ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400' : 'hover:bg-gray-100 dark:hover:bg-[#1e1e1e] text-gray-600 dark:text-gray-400'}`}>
-              <div className="flex items-center gap-3 truncate"><MessageSquare size={16} className="opacity-70"/> <span className="truncate">{s.title}</span></div>
-              <button onClick={e => delChat(s.id, e)} className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100"><Trash2 size={14}/></button>
-            </div>
-          ))}
-        </div>
-        
-        {/* ML Trainer Module */}
-        <div className="p-4 bg-gray-50 dark:bg-[#1a1a1a] border-t border-gray-200 dark:border-gray-800">
-          <div className="text-xs font-bold text-blue-600 dark:text-blue-400 mb-2 uppercase flex items-center gap-1"><BrainCircuit size={14}/> Kinetic Learning</div>
-          <div className="flex gap-2 mb-2">
-            <input value={mlInput} onChange={e => setMlInput(e.target.value.toUpperCase())} placeholder="Ex: A, B, SEND" className="w-full p-2 text-xs font-medium bg-white dark:bg-[#242424] border border-gray-200 dark:border-gray-700 rounded-md outline-none focus:border-blue-500 uppercase" />
-            <button onClick={() => { if(!settings.visionEnabled) { alert("Enable Neural Optics (Camera) first."); return; } learnSign(mlInput); setTimeout(() => { setMlCount(getTrainedSignsCount()); setMlInput(''); }, 200); }} className="px-3 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-bold transition-colors shadow-sm">Train</button>
+      {/* Header */}
+      <header className="flex-none p-4 flex justify-between items-center glass-panel z-10 mx-4 mt-4 rounded-2xl shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-indigo-600 rounded-lg shadow-lg shadow-indigo-500/30">
+            <Sparkles className="text-white w-6 h-6 animate-pulse" />
           </div>
-          <div className="text-[10px] font-semibold text-gray-500 flex justify-between items-center uppercase tracking-wider">
-            <span>Vectors Stored: <b className="text-gray-800 dark:text-gray-200">{mlCount}</b></span>
-            <button onClick={() => { clearTrainedSigns(); setMlCount(0); }} className="text-red-500 hover:text-red-400">Purge Memory</button>
+          <div>
+            <h1 className="font-bold text-lg dark:text-white leading-tight">GestureGenius</h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Sign Language & Air Gestures</p>
           </div>
         </div>
-
-        {/* Ultron Panel */}
-        <div className="p-4 bg-gray-100 dark:bg-[#121212] border-t border-gray-200 dark:border-gray-800">
-          <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => { inputRef.current = 'enable overlay'; sendRef.current(); }} className="flex items-center justify-center gap-2 p-2.5 text-xs font-bold text-gray-700 dark:text-gray-300 bg-white dark:bg-[#242424] border border-gray-200 dark:border-gray-700 rounded-md hover:bg-gray-50 dark:hover:bg-[#2a2a2a] shadow-sm"><Zap size={14} className="text-yellow-500"/> HUD</button>
-            <button onClick={() => { inputRef.current = 'enable accessibility'; sendRef.current(); }} className="flex items-center justify-center gap-2 p-2.5 text-xs font-bold text-gray-700 dark:text-gray-300 bg-white dark:bg-[#242424] border border-gray-200 dark:border-gray-700 rounded-md hover:bg-gray-50 dark:hover:bg-[#2a2a2a] shadow-sm"><Settings size={14} className="text-gray-400"/> Ultron</button>
-          </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setIsCameraActive(!isCameraActive)} className={`p-2 rounded-xl transition-all flex items-center gap-2 ${isCameraActive ? 'bg-indigo-600 text-white shadow-indigo-500/20 shadow-lg' : 'hover:bg-black/5 dark:hover:bg-white/10 dark:text-slate-300'}`}>
+            <Camera size={20} />
+            <span className="hidden md:inline text-xs font-medium">{isCameraActive ? "ON" : "OFF"}</span>
+          </button>
+          <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-black/5 dark:hover:bg-white/10 rounded-xl dark:text-slate-300 transition-colors">
+            <Settings size={20} />
+          </button>
         </div>
-      </aside>
+      </header>
 
       {/* Main Chat Area */}
-      <main className="flex-1 flex flex-col relative h-full w-full">
-        <header className="h-14 flex items-center justify-between px-4 border-b border-gray-200 dark:border-gray-800 bg-white/80 dark:bg-[#0a0a0a]/80 backdrop-blur-md z-10">
-          <div className="flex items-center gap-3">
-            <button onClick={() => setDrawerOpen(!drawerOpen)} className="p-2 text-gray-500 hover:text-gray-900 dark:hover:text-white transition-colors"><Menu size={20}/></button>
-            <span className="font-bold text-lg tracking-wide flex items-center gap-2"><Sparkles size={18} className="text-blue-600 dark:text-blue-500"/> NOVA<span className="font-light text-gray-400">AGI</span></span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} className={`p-2 rounded-lg transition-colors ${settings.visionEnabled ? 'text-green-600 bg-green-100 dark:text-green-400 dark:bg-green-900/30' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-[#1a1a1a]'}`}><Camera size={20}/></button>
-            <button onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))} className="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-[#1a1a1a] rounded-lg">{settings.theme === 'dark' ? <Sun size={20}/> : <Moon size={20}/>}</button>
-            <button onClick={() => setSettingsOpen(true)} className="p-2 text-gray-500 hover:bg-gray-100 dark:hover:bg-[#1a1a1a] rounded-lg"><Settings size={20}/></button>
-          </div>
-        </header>
-
-        <div className="flex-1 overflow-y-auto p-4 md:px-24 lg:px-48 pb-32">
-          {messages.map(m => (
-            <div key={m.id} className={`flex gap-4 mb-6 ${m.role === 'user' ? 'justify-end' : ''}`}>
-              {m.role === 'model' && <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white flex-shrink-0 shadow-md shadow-blue-900/20"><Sparkles size={16}/></div>}
-              <div className={`px-5 py-3.5 rounded-2xl max-w-[85%] text-[15px] leading-relaxed shadow-sm ${m.role === 'user' ? 'bg-gray-200 dark:bg-[#242424] text-gray-900 dark:text-gray-100' : 'bg-white dark:bg-[#121212] border border-gray-100 dark:border-gray-800 text-gray-800 dark:text-gray-200'}`}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
+      <main className="flex-1 flex flex-col relative max-w-5xl w-full mx-auto overflow-hidden">
+        <div className="flex-1 overflow-y-auto p-4 space-y-6 scrollbar-hide pb-32">
+          {messages.map((msg) => (
+            <div key={msg.id} className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-pink-500 text-white'}`}>
+                {msg.role === 'user' ? <User size={16} /> : <Cpu size={16} />}
+              </div>
+              <div className={`max-w-[80%] rounded-2xl p-4 shadow-sm relative ${msg.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-tl-none border border-slate-100 dark:border-slate-700'}`}>
+                <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
               </div>
             </div>
           ))}
           
-          {/* AGI Neural Processing Animation */}
-          {typing && (
-            <div className="flex gap-4 mb-6 items-center">
-              <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-900/50 animate-pulse">
-                <BrainCircuit size={16} />
+          {/* NEW THINKING ANIMATION */}
+          {isTyping && (
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full bg-pink-500 text-white flex items-center justify-center">
+                <Cpu size={16} />
               </div>
-              <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 dark:text-blue-400">
-                <Loader2 size={16} className="animate-spin" />
-                Processing cognitive vectors...
+              <div className="bg-white dark:bg-slate-800 rounded-2xl rounded-tl-none p-4 border border-slate-100 dark:border-slate-700 flex items-center gap-3 text-pink-500 dark:text-pink-400 font-medium">
+                <Loader2 size={18} className="animate-spin" />
+                Thinking...
               </div>
             </div>
           )}
-          <div ref={chatEnd} />
+          <div ref={messagesEndRef} />
         </div>
 
-        {/* Floating Camera Preview (Strictly Mirrored via scale-x-[-1]) */}
-        <div className={`absolute left-4 bottom-28 z-30 transition-all duration-300 ${settings.visionEnabled ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10 pointer-events-none'}`}>
-          <div className="relative w-40 h-32 rounded-xl overflow-hidden shadow-2xl shadow-green-900/20 border-2 border-green-500/50 bg-black backdrop-blur-md">
-            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover transform scale-x-[-1] opacity-90" />
-            <div className="absolute bottom-0 w-full bg-black/80 backdrop-blur-sm text-center py-1.5 text-[9px] font-black text-green-400 uppercase tracking-widest">
-              Neural Optics Online
-            </div>
+        {/* Floating Camera Preview */}
+        <div className={`absolute left-4 bottom-24 transition-all duration-300 z-20 ${isCameraActive ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10 pointer-events-none'}`}>
+          <div className="relative overflow-hidden rounded-xl border-2 shadow-lg bg-black border-indigo-500">
+             <video ref={videoRef} autoPlay playsInline muted className="w-48 h-36 object-cover transform scale-x-[-1]" />
+             <div className="absolute bottom-0 left-0 right-0 p-2 text-center bg-gradient-to-t from-black/80 to-transparent">
+               <p className="text-[10px] text-white font-medium uppercase tracking-widest truncate px-1">Scanning...</p>
+             </div>
           </div>
         </div>
 
-        {/* Input Bar */}
-        <div className="absolute bottom-0 left-0 w-full p-4 md:px-24 lg:px-48 bg-gradient-to-t from-gray-50 via-gray-50 dark:from-[#0a0a0a] dark:via-[#0a0a0a] to-transparent z-20">
-          <div className="relative flex items-center bg-white dark:bg-[#1a1a1a] rounded-2xl border border-gray-200 dark:border-gray-800 shadow-lg shadow-black/5 focus-within:border-blue-500 dark:focus-within:border-blue-500 transition-colors">
-            <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendRef.current()} placeholder="Transmit data to NOVA or execute sign..." className="flex-1 bg-transparent border-none py-4 px-5 outline-none text-gray-800 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-600 font-medium" />
-            <button onClick={() => sendRef.current()} disabled={!input.trim() || typing} className={`p-2.5 mr-2 rounded-xl transition-all ${input.trim() ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-900/30' : 'bg-transparent text-gray-300 dark:text-gray-700'}`}>
-              <Send size={18} className={input.trim() ? 'translate-x-0.5' : ''} />
+        {/* Input Area */}
+        <div className="absolute bottom-0 left-0 w-full p-4 mb-2">
+          <div className="glass-panel p-2 rounded-2xl flex items-end gap-2 shadow-lg dark:shadow-black/20 relative z-30">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && sendRef.current()}
+              placeholder={isCameraActive ? "Sign letters or gestures..." : "Type your message..."}
+              className="flex-1 bg-transparent border-none focus:ring-0 p-3 max-h-32 dark:text-white placeholder-slate-400 outline-none"
+            />
+            <button onClick={() => setSettings(prev => ({...prev, voiceEnabled: !prev.voiceEnabled}))} className={`p-3 rounded-xl transition-colors ${settings.voiceEnabled ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}`}>
+              {settings.voiceEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+            </button>
+            <button onClick={() => sendRef.current()} disabled={!input.trim() || isTyping} className="p-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 rounded-xl text-white transition-all active:scale-95 shadow-lg shadow-indigo-500/25">
+              <Send size={20} />
             </button>
           </div>
         </div>
       </main>
 
-      {/* Settings Modal */}
-      {settingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
-          <div className="w-full max-w-sm bg-white dark:bg-[#1a1a1a] border border-gray-200 dark:border-gray-800 rounded-2xl p-6 shadow-2xl">
+      {/* Settings Panel */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="glass-panel w-full max-w-lg rounded-2xl shadow-2xl p-6 text-slate-900 dark:text-white transform transition-all scale-100 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-lg font-bold flex items-center gap-2"><Settings size={18} className="text-gray-400"/> System Configuration</h2>
-              <button onClick={() => setSettingsOpen(false)} className="text-gray-400 hover:text-gray-800 dark:hover:text-white transition-colors"><X size={20}/></button>
+              <h2 className="text-xl font-bold">Personalize AI</h2>
+              <button onClick={() => setShowSettings(false)} className="p-1 hover:bg-white/10 rounded-full"><X size={24} /></button>
             </div>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Termux Cognitive Engine</label>
-                <input 
-                  value={settings.ollamaModel} 
-                  onChange={e => setSettings(s => ({...s, ollamaModel: e.target.value}))} 
-                  className="w-full p-3 text-sm font-medium bg-gray-50 dark:bg-[#0a0a0a] rounded-lg outline-none border border-gray-200 dark:border-gray-800 focus:border-blue-500 dark:focus:border-blue-500 transition-colors" 
-                  placeholder="e.g. qwen2.5:0.5b"
-                />
-              </div>
+            
+            <div className="space-y-6">
+              <section className="space-y-2">
+                <h3 className="text-sm font-semibold uppercase opacity-70 mb-2">Preferences</h3>
+                <div className="flex items-center justify-between p-3 rounded-lg bg-white/50 dark:bg-slate-800/50">
+                  <span className="text-sm font-medium">Dark Mode</span>
+                  <button onClick={() => setLocalSettings({...localSettings, theme: localSettings.theme === 'dark' ? 'light' : 'dark'})} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${localSettings.theme === 'dark' ? 'bg-indigo-600' : 'bg-slate-400'}`}>
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${localSettings.theme === 'dark' ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+                
+                <div>
+                  <span className="block text-sm font-medium mb-1">Termux Offline Model</span>
+                  <input value={localSettings.ollamaModel} onChange={e => setLocalSettings({...localSettings, ollamaModel: e.target.value})} className="w-full p-2 bg-white/50 dark:bg-slate-800/50 rounded outline-none border border-slate-300 dark:border-slate-600 text-sm" placeholder="qwen2.5:0.5b" />
+                </div>
+              </section>
+
+              {/* Gesture Lab (ML Trainer) */}
+              <section>
+                <h3 className="text-sm font-semibold uppercase opacity-70 mb-2">Gesture Lab (ML)</h3>
+                <div className="bg-white/50 dark:bg-slate-800/50 rounded-lg p-3 space-y-3">
+                  <p className="text-xs text-slate-500">Hold your hand to the camera, type a letter, and tap Learn.</p>
+                  <div className="flex gap-2">
+                    <input value={mlInput} onChange={e => setMlInput(e.target.value.toUpperCase())} placeholder="Ex: A, B, SEND" className="flex-1 p-2 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 outline-none text-sm uppercase" />
+                    <button onClick={() => { if(!isCameraActive) { alert("Turn Camera ON first!"); return; } learnSign(mlInput); setTimeout(() => { setMlCount(getTrainedSignsCount()); setMlInput(''); }, 200); }} className="px-4 bg-indigo-600 text-white rounded text-sm font-bold">Learn</button>
+                  </div>
+                  <div className="flex justify-between items-center text-xs text-slate-500 pt-2">
+                    <span>{mlCount} signs memorized</span>
+                    <button onClick={() => { clearTrainedSigns(); setMlCount(0); }} className="text-red-500 hover:text-red-400 flex items-center gap-1"><Trash2 size={12}/> Clear</button>
+                  </div>
+                </div>
+              </section>
             </div>
-            <button onClick={() => setSettingsOpen(false)} className="w-full mt-6 py-3 bg-gray-900 dark:bg-white text-white dark:text-gray-900 font-bold rounded-xl hover:opacity-90 transition-opacity shadow-lg">Initialize Settings</button>
+
+            <div className="mt-8 flex justify-end">
+              <button onClick={() => { setSettings(localSettings); setShowSettings(false); }} className="flex items-center gap-2 px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors font-medium shadow-lg shadow-indigo-500/30">
+                <Save size={18} /> Save Changes
+              </button>
+            </div>
           </div>
         </div>
       )}
