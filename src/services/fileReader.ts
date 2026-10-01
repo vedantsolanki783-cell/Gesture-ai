@@ -2,6 +2,34 @@ import type { Message, AppSettings } from '../types';
 import { chatWebLLM } from './webllm';
 import type { MessageAttachment } from './hybridAI';
 
+export async function parseUploadedFile(file: File): Promise<MessageAttachment> {
+  const lowerName = file.name.toLowerCase();
+  const isImage = /^image\//.test(file.type) || /\.(png|jpe?g|webp|gif|bmp)$/i.test(lowerName);
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(lowerName);
+
+  if (isImage || isPdf) {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error ?? new Error('Could not read file.'));
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsDataURL(file);
+    });
+
+    return {
+      name: file.name,
+      type: isImage ? 'image' : 'pdf',
+      content: dataUrl,
+    };
+  }
+
+  const text = await file.text();
+  return {
+    name: file.name,
+    type: 'text',
+    content: text,
+  };
+}
+
 function attachmentsToText(attachments?: MessageAttachment[]): string {
   if (!attachments || attachments.length === 0) return '';
   const MAX_CHARS = 8000;
@@ -123,7 +151,7 @@ export async function generateLocalOrCloud(
 export async function analyzeWithGemini(base64: string, settings: AppSettings, customGestures: AppSettings['customGestures']): Promise<string> {
   const key = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
   if (!key) throw new Error('VITE_GEMINI_API_KEY is not configured');
-  const prompt = `Analyze this mirrored webcam image for a hand gesture. Recognize ASL static letters A, B, C, L, V, Y and these controls: THEME_SWITCH (open palm), CLEAR (thumb down). Custom gestures: ${customGestures.map(g => `${g.name}: ${g.description}`).join('; ')}. Return ONLY JSON like {"type":"LETTER|GESTURE|UNKNOWN","value":"A","confidence":0.0}. Do not guess.`;
+  const prompt = `Analyze this mirrored webcam image for a hand gesture. Recognize ASL static letters A, B, C, L, V, Y and these controls: THEME_SWITCH (open palm), CLEAR (thumb down). Custom gestures: ${customGestures.map(g => `${g.name}:${g.description}`).join('; ')}. Return ONLY JSON like {"type":"LETTER|GESTURE|UNKNOWN","value":"A","confidence":0.0}. Do not guess.`;
   const response = await fetch(geminiUrl(settings.geminiModel, key), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ contents: [{ role: 'user', parts: [{ inlineData: { mimeType: 'image/jpeg', data: base64.split(',')[1] || base64 } }, { text: prompt }] }], generationConfig: { responseMimeType: 'application/json' } })
