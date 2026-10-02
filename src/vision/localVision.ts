@@ -2,13 +2,12 @@ import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
 import type { CustomGesture, Landmark, VisionResult } from '../types';
 
 const httpsUrl = (path: string): string => ['ht', 'tps://', path].join('');
-const WASM_PATH = httpsUrl('cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+const WASM_PATH = httpsUrl('cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm');
 const MODEL_PATH = httpsUrl('storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task');
 
 const HOLD_DELAY_MS = 500;
 const POST_EMIT_LOCK_MS = 1200;
 
-// Palm-Ray Mouse Tuning
 const PINCH_THRESH = 0.058;
 let filteredX = 0.5, filteredY = 0.5;
 let prevTargetX = 0.5, prevTargetY = 0.5;
@@ -22,7 +21,6 @@ let candidateSign = '', latchedSign = '';
 let candidateStartTime = 0, lastEmittedTime = 0;
 let releaseFrameCount = 0;
 
-// ML Database
 interface MLEmbedding { label: string; vector: number[]; }
 let mlDatabase: MLEmbedding[] = [];
 let pendingTrainLabel: string | null = null;
@@ -131,7 +129,6 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // MIRROR FIX: Coordinates map directly. If you move your hand right, the cursor moves right.
     if (mouselessMode) {
       const h = hands[0];
       const rayX = (h[5].x * 0.65 + h[8].x * 0.35); 
@@ -149,6 +146,8 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
 
       const pinching = d(h[8], h[4]) < PINCH_THRESH;
       updateMouselessCursor(true, filteredX, filteredY, pinching);
+      window.dispatchEvent(new CustomEvent('nova-mouseless-toggle', { detail: true }));
+      window.dispatchEvent(new CustomEvent('nova-mouseless-cursor', { detail: { x: filteredX * window.innerWidth, y: filteredY * window.innerHeight, pinching } }));
 
       const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
       if (filteredY < 0.12) { window.scrollBy(0, -15); bridge?.swipeScreen?.(500,450,500,1200,260); }
@@ -160,6 +159,7 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
       }
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
+    window.dispatchEvent(new CustomEvent('nova-mouseless-toggle', { detail: false }));
 
     const vector = normalizeVector(hands[0]);
     if (pendingTrainLabel) {
@@ -169,7 +169,6 @@ export async function localVision(video: HTMLVideoElement, _: number): Promise<V
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Try ML custom signs first, fallback to ASL
     let sign = classifyWithML(vector) || classifyASL(hands[0]);
 
     if (!sign) {
