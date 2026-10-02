@@ -1,242 +1,137 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Bot, User, Send, Settings, CameraOff, Sun, Moon, Trash2, Mic, Paperclip, Zap, Camera, Copy, Check } from 'lucide-react';
-import { Message, AppSettings, VisionResponse } from './types';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Bot, Copy, Mic, MicOff, Moon, Paperclip, Send, Settings, Sparkles, Sun, Trash2, User, X } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
-import SettingsPanel from './components/SettingsPanel';
-import CameraView from './components/CameraView';
+import { parseUploadedFile } from './services/fileReader';
+import type { MessageAttachment } from './services/hybridAI';
+import { CameraView } from './components/CameraView';
+import { SettingsPanel } from './components/SettingsPanel';
 import { useVision } from './hooks/useVision';
-import { learnSign, clearTrainedSigns, getTrainedSignsCount } from './vision/localVision';
+import { learnSign } from './vision/localVision';
+import type { AppSettings, Message, VisionResult } from './types';
+import './styles.css';
 
 const defaults: AppSettings = {
   theme: 'dark', voiceEnabled: true, visionEnabled: false, confidenceThreshold: 0.72,
-  aiProvider: 'ollama', ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen2.5:1.5b',
-  geminiModel: 'gemini-2.5-flash', webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
-  systemInstruction: 'You are NOVA. Answer concisely.', customGestures: []
+  aiProvider: 'cloudFree', ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen2.5:1.5b', geminiModel: 'gemini-2.5-flash',
+  cloudFreeBaseUrl: 'https://api.groq.com/openai/v1', cloudFreeApiKey: '', cloudFreeModel: 'llama-3.3-70b-versatile',
+  webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
+  systemInstruction: 'You are NOVA, a concise and helpful assistant designed for people who use sign language. Be clear, respectful and fast.', customGestures: []
 };
 
 function executeAndroidAgentCommand(rawText: string): string | null {
   const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
   const text = rawText.toLowerCase().trim();
-
   const isOverlay = /\b(enable|start|show|turn on)\s+(overlay|bubble|hud)\b/i.test(text);
   const isUltron = /\b(enable|open|turn on)\s+(accessibility|ultron)\b/i.test(text);
   const isHome = /^(go\s+home|home)$/i.test(text);
   const isBack = /^(go\s+back|back)$/i.test(text);
   const openAppMatch = text.match(/^(?:open|launch)\s+([a-z0-9\s._-]+)$/i);
-
-  if (!bridge && (isOverlay || isUltron || isHome || isBack || openAppMatch)) return '⚠️ Android Bridge Not Found.';
-  if (isOverlay) return bridge.enableOverlayBubble() === 'OPENED_OVERLAY_SETTINGS' ? '⚡ Opening Settings...' : '⚡ Floating Bubble Active!';
-  if (isUltron) { bridge.openAccessibilitySettings(); return '🤖 Opening Accessibility Settings...'; }
-  if (openAppMatch && bridge.openApp(openAppMatch[1].trim())) return `🚀 Launching ${openAppMatch[1].toUpperCase()}...`;
-  if (bridge && !bridge.isUltronConnected()) { bridge.openAccessibilitySettings(); return '⚠️ Ultron OFF. Turn it ON.'; }
-  if (isHome) { bridge.globalAction('HOME'); return '🏠 Executed HOME.'; }
-  if (isBack) { bridge.globalAction('BACK'); return '🔙 Executed BACK.'; }
+  if (!bridge) return null;
+  if (isOverlay) return bridge.enableOverlayBubble() === 'OPENED_OVERLAY_SETTINGS' ? 'Opening overlay permission settings…' : 'Floating bubble active.';
+  if (isUltron) { bridge.openAccessibilitySettings(); return 'Opening Accessibility settings…'; }
+  if (openAppMatch && bridge.openApp(openAppMatch[1].trim())) return `Launching ${openAppMatch[1].trim()}…`;
+  if (!bridge.isUltronConnected()) { bridge.openAccessibilitySettings(); return 'The Accessibility Service is off — turn it on to use device commands.'; }
+  if (isHome) { bridge.globalAction('HOME'); return 'Done.'; }
+  if (isBack) { bridge.globalAction('BACK'); return 'Done.'; }
   return null;
 }
 
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => {
-    try { return { ...defaults, ...JSON.parse(localStorage.getItem('nova_settings') || '{}') }; } catch { return defaults; }
+    try { return { ...defaults, ...JSON.parse(localStorage.getItem('nova-unified-settings') || '{}') }; } catch { return defaults; }
   });
-
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', role: 'model', content: 'Hello! How can I assist you today?', timestamp: Date.now() }
-  ]);
-  
+  const [messages, setMessages] = useState<Message[]>([{ id: 'welcome', role: 'model', text: 'Hello. I am NOVA Gesture AI.\n\nI can combine local sign recognition, custom gestures and an AI model. You can also teach me new hand signs below the camera.', timestamp: Date.now() }]);
   const [input, setInput] = useState('');
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
+  const [learnLabel, setLearnLabel] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [typing, setTyping] = useState(false);
+  const [provider, setProvider] = useState('Ready');
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [mlInput, setMlInput] = useState('');
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
   const chatEnd = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { 
-    localStorage.setItem('nova_settings', JSON.stringify(settings)); 
-    document.documentElement.classList.toggle('dark', settings.theme === 'dark');
-  }, [settings]);
-
+  useEffect(() => { localStorage.setItem('nova-unified-settings', JSON.stringify(settings)); document.documentElement.dataset.theme = settings.theme; }, [settings]);
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, typing]);
 
-  const copyToClipboard = async (text: string, id: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId(null), 1200);
-    } catch {}
-  };
+  const speak = useCallback((text: string) => {
+    if (!settings.voiceEnabled || !('speechSynthesis' in window)) return;
+    speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.rate = 1.05; speechSynthesis.speak(u);
+  }, [settings.voiceEnabled]);
 
-  const send = useCallback(async (val = input) => {
-    const text = val.trim(); if (!text || typing) return;
-    setMessages(p => [...p, { id: crypto.randomUUID(), role: 'user', content: text, timestamp: Date.now() }]);
-    setInput(''); setTyping(true);
+  const send = useCallback(async (value = input) => {
+    const text = value.trim(); if ((!text && attachments.length === 0) || typing) return;
+    const label = text || (attachments.length ? `[${attachments.length} file(s) attached]` : '');
+    const user: Message = { id: crypto.randomUUID(), role: 'user', text: label, timestamp: Date.now() };
+    setMessages(prev => [...prev, user]); setInput(''); setTyping(true);
 
     const androidReply = executeAndroidAgentCommand(text);
     if (androidReply) {
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', content: androidReply, timestamp: Date.now() }]);
-      setTyping(false); return;
+      setAttachments([]); setProvider('Device command'); setTyping(false);
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: androidReply, timestamp: Date.now() }]);
+      return;
     }
 
+    const result = await generateLocalOrCloud(text, messages, settings, attachments);
+    setAttachments([]);
+    setProvider(result.provider); setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: result.text, timestamp: Date.now() }]); setTyping(false); speak(result.text);
+  }, [input, messages, settings, typing, speak, attachments]);
+
+  const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
     try {
-      const res = await generateLocalOrCloud(text, messages, settings);
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', content: res.text, timestamp: Date.now() }]);
-    } catch {
-      setMessages(p => [...p, { id: crypto.randomUUID(), role: 'model', content: '⚠️ Local AI Offline. Open Termux and run `ollama serve`.', timestamp: Date.now() }]);
-    } finally { setTyping(false); }
-  }, [input, messages, settings, typing]);
+      const parsed = await Promise.all(Array.from(files).map(parseUploadedFile));
+      setAttachments(prev => [...prev, ...parsed]);
+    } catch (err) { console.error('File read error:', err); }
+    e.target.value = '';
+  };
 
-  const handleGestureDetected = useCallback((result: VisionResponse) => {
-    if (result.type === 'LETTER') setInput(p => p + result.value);
-    else if (result.value === 'CLEAR') setInput('');
-    else if (result.value === 'SEND') send();
-  }, [send]);
+  const toggleMic = () => {
+    if (listening) { recognitionRef.current?.stop(); setListening(false); return; }
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) { setProvider('Browser speech recognition unavailable'); return; }
+    const r = new SpeechRecognition(); r.lang = 'en-US'; r.continuous = false; r.interimResults = false;
+    r.onstart = () => setListening(true); r.onend = () => setListening(false); r.onerror = () => setListening(false);
+    r.onresult = (e: any) => setInput((e.results?.[0]?.[0]?.transcript || '').trim()); recognitionRef.current = r; r.start();
+  };
 
-  const vision = useVision(settings, settings.customGestures, handleGestureDetected);
+  const execute = useCallback((result: VisionResult) => {
+    if (result.type === 'LETTER') { setInput(prev => prev + result.value); return; }
+    if (result.value === 'CLEAR') { setInput(''); return; }
+    if (result.value === 'SEND') { send(); return; }
+    if (result.value === 'THEME_SWITCH') { setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' })); return; }
+    const custom = settings.customGestures.find(g => g.name.toUpperCase() === result.value.toUpperCase());
+    if (!custom) return;
+    if (custom.action === 'CLEAR') setInput('');
+    else if (custom.action === 'THEME_SWITCH') setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }));
+    else if (custom.action === 'COPY_LAST') navigator.clipboard?.writeText(messages.filter(m => m.role === 'model').at(-1)?.text || '');
+    else if (custom.action === 'TOGGLE_MIC') toggleMic();
+    else if (custom.action === 'SEND_MESSAGE') setInput(prev => `${prev}${prev ? ' ' : ''}${custom.name}`);
+  }, [messages, settings.customGestures, send]);
 
-  return (
-    <div className="flex flex-col h-screen bg-[#090D16] text-gray-100 font-sans overflow-hidden">
-      
-      {/* Header matching Image 2 */}
-      <header className="flex items-center justify-between px-4 py-3 bg-[#090D16] shrink-0 border-b border-gray-800/40">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full border border-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.4)] flex items-center justify-center bg-black/50">
-            <Zap size={18} fill="currentColor" className="text-yellow-400" />
-          </div>
-          <div>
-            <h1 className="font-bold text-xs tracking-widest text-white uppercase">NOVA GESTURE AI</h1>
-            <p className="text-[10px] text-gray-400 flex items-center gap-1.5 font-medium tracking-wide">
-              <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full inline-block"></span> 
-              JARVIS + ULTRON CANVAS · Local · {settings.ollamaModel}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <button onClick={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} className="p-2 hover:bg-[#1E293B] rounded-lg text-gray-400 transition-colors">
-            {settings.visionEnabled ? <Camera size={18} className="text-[#10B981]" /> : <CameraOff size={18} />}
-          </button>
-          <button onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))} className="p-2 hover:bg-[#1E293B] rounded-lg text-gray-400 transition-colors">
-            {settings.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
-          <button onClick={() => setSettingsOpen(true)} className="p-2 hover:bg-[#1E293B] rounded-lg text-gray-400 transition-colors">
-            <Settings size={18} />
-          </button>
-        </div>
-      </header>
+  const onDetected = useCallback((result: VisionResult) => execute(result), [execute]);
+  const vision = useVision(settings, settings.customGestures, onDetected);
+  const themeIcon = settings.theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>;
 
-      <main className="flex-1 flex flex-col p-3 gap-3 overflow-hidden max-w-4xl mx-auto w-full">
-        
-        {/* Top Camera Block matching Image 2 */}
-        <div className={`flex-shrink-0 bg-[#121927] rounded-2xl border border-gray-800/60 flex items-center justify-center relative overflow-hidden transition-all duration-300 ${settings.visionEnabled ? 'h-48' : 'h-36'}`}>
-          {settings.visionEnabled ? (
-            <div className="w-full h-full relative flex items-center justify-center">
-              <CameraView videoRef={vision.videoRef} enabled={settings.visionEnabled} status={vision.status} lastDetection={vision.lastDetection} onToggle={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} settings={settings} />
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-3">
-              <CameraOff size={32} strokeWidth={1.5} className="text-gray-500" />
-              <span className="text-gray-400 text-xs font-medium">Vision is offline</span>
-              <button onClick={() => setSettings(s => ({...s, visionEnabled: true}))} className="px-4 py-1.5 bg-[#10B981] text-black font-bold text-xs rounded-full shadow hover:bg-[#059669] transition-colors">
-                Enable camera
-              </button>
-            </div>
-          )}
-
-          {settings.visionEnabled && (
-            <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg border border-white/10 flex items-center gap-2 z-10">
-              <input value={mlInput} onChange={e => setMlInput(e.target.value.toUpperCase())} placeholder="Sign (A-Z)" className="w-20 bg-transparent border-b border-gray-500 text-[11px] text-white outline-none uppercase pb-0.5" />
-              <button onClick={() => { learnSign(mlInput); setMlInput(''); }} className="bg-[#10B981] text-black text-[10px] font-bold px-2 py-0.5 rounded">Learn</button>
-            </div>
-          )}
-        </div>
-
-        {/* Chat Section matching Image 2 */}
-        <div className="flex-1 bg-[#090D16] rounded-2xl border border-gray-800/60 flex flex-col overflow-hidden relative">
-          
-          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800/60 bg-[#0C111D] shrink-0">
-            <div>
-              <h2 className="text-xs font-bold text-white">Assistant</h2>
-              <p className="text-[10px] text-gray-500">Jarvis + Ultron Generative Core</p>
-            </div>
-            <button onClick={() => setMessages([{ id: '1', role: 'model', content: 'Hello! How can I assist you today?', timestamp: Date.now() }])} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-white px-3 py-1 bg-[#1E293B] rounded-lg border border-gray-700/50 transition-colors">
-              <Trash2 size={12} /> Clear
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {messages.map(m => (
-              <div key={m.id} className={`flex items-start gap-3 w-full ${m.role === 'user' ? 'justify-end' : ''}`}>
-                
-                {m.role === 'model' && (
-                  <>
-                    <div className="w-7 h-7 rounded-full bg-[#10B981]/10 flex items-center justify-center flex-shrink-0 text-[#10B981]">
-                      <Bot size={15} strokeWidth={1.5} />
-                    </div>
-                    <div>
-                      <div className="px-4 py-3 rounded-2xl rounded-tl-none max-w-full text-xs leading-relaxed bg-[#1E293B] text-gray-200 shadow-sm border border-gray-700/30">
-                        <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
-                      </div>
-                      <button onClick={() => copyToClipboard(m.content, m.id)} className="text-gray-500 hover:text-gray-300 mt-1 ml-1 p-0.5 flex items-center gap-1 text-[10px]">
-                        {copiedId === m.id ? <Check size={11} className="text-[#10B981]" /> : <Copy size={11} />}
-                        {copiedId === m.id ? 'Copied' : ''}
-                      </button>
-                    </div>
-                  </>
-                )}
-
-                {m.role === 'user' && (
-                  <>
-                    <div className="px-4 py-3 rounded-2xl rounded-tr-none max-w-[75%] text-xs leading-relaxed bg-[#10B981] text-[#090D16] font-medium shadow-sm">
-                      <div style={{ whiteSpace: 'pre-wrap' }}>{m.content}</div>
-                    </div>
-                    <div className="w-7 h-7 rounded-lg bg-[#10B981] flex items-center justify-center flex-shrink-0 text-[#090D16]">
-                      <User size={15} strokeWidth={2} />
-                    </div>
-                  </>
-                )}
-
-              </div>
-            ))}
-
-            {/* Thinking Animation */}
-            {typing && (
-              <div className="flex items-start gap-3 w-full">
-                <div className="w-7 h-7 rounded-full bg-[#10B981]/10 flex items-center justify-center flex-shrink-0 text-[#10B981]">
-                  <Bot size={15} strokeWidth={1.5} />
-                </div>
-                <div className="bg-[#1E293B] px-4 py-3 rounded-2xl rounded-tl-none flex items-center gap-1.5 shadow-sm border border-gray-700/30">
-                  <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-bounce"></span>
-                  <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></span>
-                  <span className="w-1.5 h-1.5 bg-[#10B981] rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></span>
-                </div>
-              </div>
-            )}
-            <div ref={chatEnd} />
-          </div>
-
-          {/* Input Bar matching Image 2 */}
-          <div className="p-3 bg-[#0C111D] shrink-0">
-            <div className="flex items-center gap-2 bg-[#121927] rounded-xl p-1.5 border border-gray-800">
-              <button className="p-2 text-gray-400 hover:text-white transition-colors"><Mic size={18} /></button>
-              <button className="p-2 text-gray-400 hover:text-white transition-colors"><Paperclip size={18} /></button>
-              <input 
-                value={input} 
-                onChange={e => setInput(e.target.value)} 
-                onKeyDown={e => e.key === 'Enter' && send()} 
-                placeholder="Ask anything, 'make presentation on...', 'build calculator in html'..." 
-                className="flex-1 bg-transparent border-none text-xs text-white placeholder-gray-500 outline-none px-1" 
-              />
-              <button 
-                onClick={() => send()} 
-                disabled={!input.trim() || typing} 
-                className={`p-2.5 rounded-lg transition-colors ${input.trim() ? 'bg-[#10B981] text-[#090D16] hover:bg-[#059669]' : 'bg-transparent text-gray-600'}`}
-              >
-                <Send size={16} strokeWidth={2} className={input.trim() ? 'translate-x-0.5' : ''} />
-              </button>
-            </div>
-          </div>
-        </div>
-      </main>
-
-      <SettingsPanel isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} onSave={setSettings} />
-    </div>
-  );
+  return <div className="app">
+    <header><div className="brand"><div className="logo"><Sparkles size={20}/></div><div><h1>NOVA GESTURE AI</h1><span><i/> {provider}</span></div></div><div className="header-actions"><button title="Voice" onClick={() => setSettings(s => ({ ...s, voiceEnabled: !s.voiceEnabled }))}>{settings.voiceEnabled ? <Mic/> : <MicOff/>}</button><button title="Theme" onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}>{themeIcon}</button><button title="Settings" onClick={() => setSettingsOpen(true)}><Settings/></button></div></header>
+    <main>
+      <aside>
+        <CameraView videoRef={vision.videoRef} enabled={settings.visionEnabled} status={vision.status} lastDetection={vision.lastDetection} onToggle={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} settings={settings}/>
+        {settings.visionEnabled && <div className="learn-row">
+          <input value={learnLabel} onChange={e => setLearnLabel(e.target.value.toUpperCase())} placeholder="Sign label, e.g. A" maxLength={16}/>
+          <button className="secondary" onClick={() => { if (learnLabel.trim()) { learnSign(learnLabel.trim()); setLearnLabel(''); } }}>Teach this sign</button>
+        </div>}
+      </aside>
+      <section className="chat"><div className="chat-head"><div><b>Assistant</b><span>Sign language companion</span></div><button onClick={() => setMessages([])}><Trash2 size={16}/> Clear</button></div><div className="messages">{messages.map(m => <div key={m.id} className={`message ${m.role}`}><div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div><div className="bubble"><div>{m.text}</div>{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div></div>)}{typing && <div className="message model"><div className="avatar"><Bot size={15}/></div><div className="bubble dots">● ● ●</div></div>}<div ref={chatEnd}/></div>
+        {attachments.length > 0 && <div className="attachments-row">{attachments.map((a, i) => <span key={i} className="attachment-chip">{a.name}<button onClick={() => setAttachments(prev => prev.filter((_, idx) => idx !== i))}><X size={12}/></button></span>)}</div>}
+        <input ref={fileInputRef} type="file" multiple hidden onChange={onFilePicked} />
+        <div className="composer"><button className={listening ? 'active mic' : 'mic'} onClick={toggleMic}>{listening ? <MicOff/> : <Mic/>}</button><button className="mic" title="Attach file" onClick={() => fileInputRef.current?.click()}><Paperclip/></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} placeholder="Type, speak, or use a sign…"/><button className="send" onClick={() => send()} disabled={(!input.trim() && attachments.length === 0) || typing}><Send/></button></div></section>
+    </main>
+    {settingsOpen && <SettingsPanel settings={settings} onUpdate={setSettings} onClose={() => setSettingsOpen(false)}/>}
+  </div>;
 }
+
+declare global { interface Window { SpeechRecognition: any; webkitSpeechRecognition: any; } }
