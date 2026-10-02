@@ -8,11 +8,6 @@
  *   ╚═════╝ ╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝    ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝
  * 
  *  MODULE: ULTRON 3D SPATIAL KINEMATICS & ASL GENERATIVE CORE (MAXIMUM POTENTIAL EDITION)
- *  CAPABILITIES:
- *   - Advanced 3D Linear Algebra Engine (Vector Cross/Dot Products, Plane Projection)
- *   - VR-Grade 1-Euro Kinematic Smoothing (Zero-Latency, Anti-Jitter Mouse)
- *   - Anatomically Precise ASL Detection (Rotation-Invariant)
- *   - Two-Hand "Middle Finger" Mouse Toggle (reliable, distinctive, low false-trigger)
  * ====================================================================================================
  */
 
@@ -27,25 +22,26 @@ const WASM_PATH = httpsUrl('cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/
 const MODEL_PATH = httpsUrl('storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task');
 
 const CONFIG = {
-  GESTURE_LATCH_DELAY_MS: 500,      // Milliseconds required to hold a sign perfectly still
-  GESTURE_COOLDOWN_MS: 1000,        // Cooldown period after a successful sign emission
+  GESTURE_LATCH_DELAY_MS: 500,      
+  GESTURE_COOLDOWN_MS: 1000,        
 
-  // --- Wireless mouse tuning (sensitivity pass 2 — ray-cast + scale-normalized pinch) ---
+  // --- FINAL BOSS WIRELESS MOUSE TUNING ---
   TOGGLE_LATCH_DELAY_MS: 650,
-  // Pinch thresholds are now normalized against the hand's own index-knuckle
-  // length (see REF_LENGTH below), same trick your reference Python engine
-  // uses — this makes click sensitivity consistent whether your hand is
-  // close to or far from the camera, instead of a fixed pixel-ish distance.
-  MOUSE_PINCH_DOWN_THRESH: 0.55,
-  MOUSE_PINCH_UP_THRESH: 0.75,
-  MOUSE_ROI_MARGIN: 0.10,
-  SCROLL_TRIGGER_ZONE: 0.12,
-  SCROLL_VELOCITY: 34,
-  CLICK_COOLDOWN_MS: 480,
-  // "Ray cast" reach: how far the cursor projects along the direction your
-  // hand is tilted, on top of plain palm position. Higher = more reach from
-  // less hand movement (more sensitive), like pointing with a laser.
-  RAY_REACH: 0.3
+  
+  // Pinch thresholds increased: Triggers clicks much earlier before fingers fully touch
+  MOUSE_PINCH_DOWN_THRESH: 0.85,
+  MOUSE_PINCH_UP_THRESH: 1.15,
+  
+  MOUSE_ROI_MARGIN: 0.12,         
+  
+  // Scrolling dynamically multiplies speed based on how far into this zone you push
+  SCROLL_TRIGGER_ZONE: 0.16,
+  SCROLL_BASE_VELOCITY: 35,
+  
+  // Rapid fire clicking enabled
+  CLICK_COOLDOWN_MS: 200,
+  
+  RAY_REACH: 0.25
 };
 
 // ====================================================================================================
@@ -134,10 +130,9 @@ class OneEuroFilter {
   }
 }
 
-// Sensitivity pass: higher minCutoff + beta = cursor tracks hand movement more
-// closely with less lag (was 0.6 / 0.04 — now snappier, still stable at rest).
-const mouseFilterX = new OneEuroFilter(0.9, 0.09, 1.0);
-const mouseFilterY = new OneEuroFilter(0.9, 0.09, 1.0);
+// ULTRA-FAST TRACKING: High minCutoff (2.5) kills input lag entirely. 
+const mouseFilterX = new OneEuroFilter(2.5, 0.15, 1.0);
+const mouseFilterY = new OneEuroFilter(2.5, 0.15, 1.0);
 
 // ====================================================================================================
 // 4. SYSTEM STATE MEMORY & GLOBAL VARIABLES
@@ -146,28 +141,23 @@ let landmarkerPromise: Promise<HandLandmarker> | null = null;
 let lastVideoTime = -1;
 let releaseFrameCount = 0;
 
-// Wireless Mouse States
 let isMouseActive = false;
 let lastToggleTime = 0;
 let toggleCandidateStart = 0;
 let lastClickTime = 0;
 let isPinching = false;
 
-// Latch States (Anti-Spam Memory) — ASL letters only
 let candidateSign = '';
 let latchedSign = '';
 let candidateStartTime = 0;
 let lastEmittedTime = 0;
 
-// ====================================================================================================
-// 5. ML ERADICATION (DUMMY EXPORTS TO PREVENT UI CRASH)
-// ====================================================================================================
-export function learnSign(_label: string) { console.log("[ULTRON] Machine Learning module disabled."); }
+export function learnSign(_label: string) { console.log("[ULTRON] ML disabled."); }
 export function clearTrainedSigns() { console.log("[ULTRON] Memory wiped."); }
 export function getTrainedSignsCount() { return 0; }
 
 // ====================================================================================================
-// 6. TRUE 3D ANATOMICAL ANALYSIS ENGINE (ASL — UNCHANGED)
+// 5. TRUE 3D ANATOMICAL ANALYSIS ENGINE
 // ====================================================================================================
 function analyzeAnatomy(lm: Landmark[]) {
   const v = (idx: number) => Vector3D.fromLM(lm[idx]);
@@ -203,7 +193,7 @@ function analyzeAnatomy(lm: Landmark[]) {
 }
 
 // ====================================================================================================
-// 7. FINAL BOSS CLASSIFIER (ASL + SEND/CLEAR — UNCHANGED, TOGGLE REMOVED FROM HERE)
+// 6. FINAL BOSS CLASSIFIER 
 // ====================================================================================================
 function classifySign(anatomy: ReturnType<typeof analyzeAnatomy>): string {
   const { 
@@ -211,13 +201,6 @@ function classifySign(anatomy: ReturnType<typeof analyzeAnatomy>): string {
     isThumbOut, isThumbDown, thumbIndexAngle, 
     allFingersClosed, allFingersOpen 
   } = anatomy;
-
-  // ------------------------------------------------------------------------
-  // A. SYSTEM OVERRIDES
-  // (The old single-hand TOGGLE_MOUSE override lived here — it now lives as
-  // a separate two-hand check in localVision(), before this function is even
-  // called, so it can't collide with or affect ASL letter detection.)
-  // ------------------------------------------------------------------------
 
   if (isIndexUp && !isMiddleUp && !isRingUp && isPinkyUp && !isThumbOut) {
     return 'SEND';
@@ -227,10 +210,6 @@ function classifySign(anatomy: ReturnType<typeof analyzeAnatomy>): string {
     return 'CLEAR';
   }
 
-  // ------------------------------------------------------------------------
-  // B. TRUE ASL ALPHABET RECOGNITION
-  // ------------------------------------------------------------------------
-  
   if (isIndexUp && !isMiddleUp && !isRingUp && !isPinkyUp) {
     if (isThumbOut && thumbIndexAngle > 60) return 'L';
     return 'D';
@@ -273,9 +252,6 @@ function classifySign(anatomy: ReturnType<typeof analyzeAnatomy>): string {
   return '';
 }
 
-// ====================================================================================================
-// 7B. WIRELESS MOUSE TOGGLE TRIGGER (restored: two hands, each showing only the middle finger)
-// ====================================================================================================
 function isOnlyMiddleFingerUp(lm: Landmark[]): boolean {
   if (!lm || lm.length < 21) return false;
   const wrist = lm[0];
@@ -287,16 +263,15 @@ function isOnlyMiddleFingerUp(lm: Landmark[]): boolean {
 }
 
 // ====================================================================================================
-// 8. HARDWARE INITIALIZATION
+// 7. HARDWARE INITIALIZATION & DOM FALLBACK CURSOR
 // ====================================================================================================
 async function getLandmarker(): Promise<HandLandmarker> {
   if (!landmarkerPromise) {
-    console.log("[ULTRON] Booting Final Boss Vision Engine...");
     landmarkerPromise = FilesetResolver.forVisionTasks(WASM_PATH).then(vision => 
       HandLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: MODEL_PATH, delegate: 'CPU' },
         runningMode: 'VIDEO', 
-        numHands: 2,  // need both hands visible to read the toggle gesture
+        numHands: 2, 
         minHandDetectionConfidence: 0.55, 
         minHandPresenceConfidence: 0.55,
         minTrackingConfidence: 0.55
@@ -306,26 +281,16 @@ async function getLandmarker(): Promise<HandLandmarker> {
   return landmarkerPromise;
 }
 
-// ====================================================================================================
-// 9. UNIVERSAL WEB CURSOR & NATIVE BRIDGE DISPATCHER
-// ====================================================================================================
 function getOrCreateWebCursor() {
   let cursor = document.getElementById('nova-finalboss-cursor');
   if (!cursor) {
     cursor = document.createElement('div');
     cursor.id = 'nova-finalboss-cursor';
     Object.assign(cursor.style, {
-      position: 'fixed',
-      width: '26px',
-      height: '26px',
-      borderRadius: '50%',
-      backgroundColor: 'rgba(16, 185, 129, 0.85)',
-      border: '2px solid rgba(255, 255, 255, 1)',
-      boxShadow: '0 0 18px rgba(16, 185, 129, 0.95)',
-      pointerEvents: 'none',
-      zIndex: '999999',
-      transform: 'translate(-50%, -50%)',
-      display: 'none',
+      position: 'fixed', width: '26px', height: '26px', borderRadius: '50%',
+      backgroundColor: 'rgba(16, 185, 129, 0.85)', border: '2px solid rgba(255, 255, 255, 1)',
+      boxShadow: '0 0 18px rgba(16, 185, 129, 0.95)', pointerEvents: 'none', zIndex: '999999',
+      transform: 'translate(-50%, -50%)', display: 'none',
       willChange: 'left, top, transform, background-color', 
       transition: 'background-color 0.08s ease-out, transform 0.08s ease-out'
     });
@@ -360,19 +325,22 @@ function transmitMouseCoordinates(visible: boolean, x = 0.5, y = 0.5, pinching =
   }
 }
 
-function invokeHardwareScroll(direction: 'up' | 'down') {
+// PROPORTIONAL DYNAMIC SCROLLING: Multiplies speed based on screen edge proximity
+function invokeHardwareScroll(direction: 'up' | 'down', intensity: number) {
   const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
+  const speed = CONFIG.SCROLL_BASE_VELOCITY * Math.max(1.0, intensity * 3.0); 
+  
   if (direction === 'up') {
-    window.scrollBy({ top: -CONFIG.SCROLL_VELOCITY, behavior: 'auto' });
-    bridge?.swipeScreen?.(500, 450, 500, 1200, 260); 
+    window.scrollBy({ top: -speed, behavior: 'instant' });
+    bridge?.swipeScreen?.(500, 450, 500, 1200 + speed, 80); 
   } else {
-    window.scrollBy({ top: CONFIG.SCROLL_VELOCITY, behavior: 'auto' });
-    bridge?.swipeScreen?.(500, 1200, 500, 450, 260); 
+    window.scrollBy({ top: speed, behavior: 'instant' });
+    bridge?.swipeScreen?.(500, 1200, 500, 450 - speed, 80); 
   }
 }
 
 // ====================================================================================================
-// 10. MAIN ULTRON VISION LOOP
+// 8. MAIN ULTRON VISION LOOP
 // ====================================================================================================
 export async function localVision(video: HTMLVideoElement, _timestamp: number): Promise<VisionResult> {
   try {
@@ -380,11 +348,8 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
     
-    video.playsInline = true; 
-    video.muted = true;
-    if (video.paused && video.srcObject) {
-      video.play().catch(() => {});
-    }
+    video.playsInline = true; video.muted = true;
+    if (video.paused && video.srcObject) video.play().catch(() => {});
 
     const landmarker = await getLandmarker();
     const currentPerformanceTime = performance.now();
@@ -402,7 +367,7 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // STATE 1: TWO-HAND MOUSE TOGGLE ("show only your middle finger on both hands")
+    // STATE 1: TWO-HAND MOUSE TOGGLE 
     if (hands.length >= 2 && isOnlyMiddleFingerUp(hands[0]) && isOnlyMiddleFingerUp(hands[1])) {
       if (toggleCandidateStart === 0) {
         toggleCandidateStart = now;
@@ -416,7 +381,6 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('nova-mode-switch', { detail: isMouseActive ? 'mouse' : 'asl' }));
         }
-        console.log(`[ULTRON] Wireless Mouse Engine: ${isMouseActive ? 'ENGAGED' : 'DISENGAGED'}`);
       }
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
@@ -425,32 +389,18 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
     const primaryHand = hands[0];
 
     // STATE 2: WIRELESS MOUSE ACTIVE
-    // Upgraded using ideas from your reference Palm Ray Engine:
-    //  - pointer position now uses a "ray cast" (palm center + hand-tilt
-    //    direction) instead of plain palm position, so tilting your hand
-    //    reaches further across the screen with less physical movement
-    //  - pinch distance is normalized against your own index-knuckle length
-    //    (REF_LENGTH) instead of a fixed distance, so click sensitivity
-    //    stays consistent whether your hand is near or far from the camera
-    //  - added a middle-finger+thumb pinch as a right-click, same as the
-    //    reference engine's left/right click split
     if (isMouseActive) {
       const anatomy = analyzeAnatomy(primaryHand);
       const v = anatomy.v;
 
-      // Scale reference: index MCP→PIP length, same trick the Python engine
-      // uses, so thresholds below are resolution/distance independent.
       const REF_LENGTH = Math.max(v(5).sub(v(6)).mag(), 0.0001);
 
-      // Palm center (wrist + index MCP + pinky MCP, weighted like the ref engine)
       const palmCenterX = (primaryHand[0].x * 0.4 + primaryHand[5].x * 0.3 + primaryHand[17].x * 0.3);
       const palmCenterY = (primaryHand[0].y * 0.4 + primaryHand[5].y * 0.3 + primaryHand[17].y * 0.3);
 
-      // Hand-tilt direction: wrist → middle-finger MCP. Projecting the palm
-      // center further along this vector is the "ray cast" — tilt your hand
-      // toward a screen edge and the cursor leads further that way.
       const dirX = primaryHand[9].x - primaryHand[0].x;
       const dirY = primaryHand[9].y - primaryHand[0].y;
+      
       const rayX = palmCenterX + dirX * CONFIG.RAY_REACH;
       const rayY = palmCenterY + dirY * CONFIG.RAY_REACH;
 
@@ -458,14 +408,13 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       const expandedY = (rayY - CONFIG.MOUSE_ROI_MARGIN) / (1 - CONFIG.MOUSE_ROI_MARGIN * 2);
 
       const mirroredX = 1.0 - expandedX;
-
       const targetX = Math.max(0.01, Math.min(0.99, mirroredX));
       const targetY = Math.max(0.01, Math.min(0.99, expandedY));
 
       const smoothedX = mouseFilterX.filter(targetX, now);
       const smoothedY = mouseFilterY.filter(targetY, now);
 
-      // Left click: index tip ↔ thumb tip, normalized by hand scale
+      // Early Pinch Logic
       const leftPinchDist = v(8).sub(v(4)).mag() / REF_LENGTH;
       if (!isPinching && leftPinchDist < CONFIG.MOUSE_PINCH_DOWN_THRESH) {
         isPinching = true;
@@ -473,14 +422,20 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
         isPinching = false;
       }
 
-      // Right click (new): middle tip ↔ thumb tip, same normalized scale
       const rightPinchDist = v(12).sub(v(4)).mag() / REF_LENGTH;
       const isRightPinching = rightPinchDist < CONFIG.MOUSE_PINCH_DOWN_THRESH;
 
       transmitMouseCoordinates(true, smoothedX, smoothedY, isPinching || isRightPinching);
 
-      if (smoothedY < CONFIG.SCROLL_TRIGGER_ZONE) invokeHardwareScroll('up');
-      if (smoothedY > 1 - CONFIG.SCROLL_TRIGGER_ZONE) invokeHardwareScroll('down');
+      // Dynamic Scrolling Execution
+      if (smoothedY < CONFIG.SCROLL_TRIGGER_ZONE) {
+        const intensity = 1.0 - (smoothedY / CONFIG.SCROLL_TRIGGER_ZONE);
+        invokeHardwareScroll('up', intensity);
+      }
+      if (smoothedY > 1 - CONFIG.SCROLL_TRIGGER_ZONE) {
+        const intensity = (smoothedY - (1 - CONFIG.SCROLL_TRIGGER_ZONE)) / CONFIG.SCROLL_TRIGGER_ZONE;
+        invokeHardwareScroll('down', intensity);
+      }
 
       const viewportX = smoothedX * window.innerWidth;
       const viewportY = smoothedY * window.innerHeight;
@@ -502,7 +457,7 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // STATE 3: ASL SIGN & GESTURE DETECTION (unchanged)
+    // STATE 3: ASL SIGN & GESTURE DETECTION 
     transmitMouseCoordinates(false);
     
     const anatomy = analyzeAnatomy(primaryHand);
@@ -515,12 +470,8 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
 
     releaseFrameCount = 0;
     
-    if (now - lastEmittedTime < CONFIG.GESTURE_COOLDOWN_MS) {
-      return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
-    }
-    if (detectedSign === latchedSign) {
-      return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
-    }
+    if (now - lastEmittedTime < CONFIG.GESTURE_COOLDOWN_MS) return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
+    if (detectedSign === latchedSign) return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
 
     if (detectedSign !== candidateSign) {
       candidateSign = detectedSign;
@@ -542,15 +493,9 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
     return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     
   } catch (error) {
-    console.error("[ULTRON] Critical Kernel Exception in Vision Loop:", error);
     return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
   }
 }
 
-export async function isLocalVisionModelAvailable() { 
-  return true; 
-}
-
-export function applyCustomGesture(res: VisionResult, _: CustomGesture[]) { 
-  return res; 
-}
+export async function isLocalVisionModelAvailable() { return true; }
+export function applyCustomGesture(res: VisionResult, _: CustomGesture[]) { return res; }
