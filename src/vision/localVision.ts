@@ -11,16 +11,16 @@ const MODEL_PATH = httpsUrl('storage.googleapis.com/mediapipe-models/hand_landma
 // ============================================================================
 // ADVANCED TUNING PARAMETERS
 // ============================================================================
-const GESTURE_HOLD_DELAY_MS = 500;       // Milliseconds required to hold a sign before firing
-const POST_EMIT_COOLDOWN_MS = 1200;      // Cooldown after firing a sign to prevent spam
-const TOGGLE_COOLDOWN_MS = 1400;         // Cooldown for switching to Wireless Mouse mode
+const GESTURE_HOLD_DELAY_MS = 500;       
+const POST_EMIT_COOLDOWN_MS = 1200;      
+const TOGGLE_COOLDOWN_MS = 1500;         // Time required between mouse toggles
 
 // Palm-Ray Mouse Dynamic Kinematics
-const PINCH_DOWN_THRESH = 0.052;         // Distance to trigger a click
-const PINCH_UP_THRESH = 0.075;           // Hysteresis release distance to prevent double-clicking
-const ACTIVE_ROI_MARGIN = 0.18;          // Deadzone margin on camera edges (allows reaching screen edges comfortably)
-const SCROLL_TRIGGER_ZONE = 0.12;        // Top 12% and Bottom 12% of screen trigger scrolling
-const SCROLL_VELOCITY = 20;              // Pixels per frame to scroll
+const PINCH_DOWN_THRESH = 0.055;         // Distance to trigger a click
+const PINCH_UP_THRESH = 0.075;           // Hysteresis release distance
+const ACTIVE_ROI_MARGIN = 0.15;          // Deadzone margin (allows reaching edges comfortably)
+const SCROLL_TRIGGER_ZONE = 0.12;        // Top 12% and Bottom 12% of screen triggers scroll
+const SCROLL_VELOCITY = 20;              
 
 // ============================================================================
 // STATE MANAGEMENT (100% LOCAL)
@@ -56,7 +56,6 @@ interface MLEmbedding {
 let mlDatabase: MLEmbedding[] = [];
 let pendingTrainLabel: string | null = null;
 
-// Initialize ML Database silently from Local Storage
 try {
   const saved = localStorage.getItem('nova_ml_gestures');
   if (saved) mlDatabase = JSON.parse(saved);
@@ -84,35 +83,22 @@ export function getTrainedSignsCount() {
 const distance3D = (a: Landmark, b: Landmark) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
 const distance2D = (a: Landmark, b: Landmark) => Math.hypot(a.x - b.x, a.y - b.y);
 
-/**
- * Normalizes a 3D hand skeleton into a scale-invariant, translation-invariant 63-dimensional vector.
- * This guarantees the gesture works whether the hand is close to the camera or far away.
- */
 function normalizeVector(lm: Landmark[]): number[] {
   const wrist = lm[0];
-  let maxDist = 0.0001; // Prevent divide-by-zero
+  let maxDist = 0.0001; 
   
-  // Shift origin to wrist and find bounding sphere
   const centered = lm.map(p => {
-    const dx = p.x - wrist.x;
-    const dy = p.y - wrist.y;
-    const dz = (p.z || 0) - (wrist.z || 0);
+    const dx = p.x - wrist.x, dy = p.y - wrist.y, dz = (p.z || 0) - (wrist.z || 0);
     const dist = Math.hypot(dx, dy, dz);
     if (dist > maxDist) maxDist = dist;
     return { x: dx, y: dy, z: dz };
   });
 
-  // Flatten and scale
   const vector: number[] = [];
-  for (const p of centered) {
-    vector.push(p.x / maxDist, p.y / maxDist, p.z / maxDist);
-  }
+  for (const p of centered) vector.push(p.x / maxDist, p.y / maxDist, p.z / maxDist);
   return vector;
 }
 
-/**
- * K-Nearest Neighbors (KNN) Euclidean distance classifier against the local database.
- */
 function classifyWithML(vector: number[]): string {
   if (!mlDatabase.length) return '';
   
@@ -121,33 +107,19 @@ function classifyWithML(vector: number[]): string {
   
   for (const item of mlDatabase) {
     let distSq = 0;
-    for (let i = 0; i < 63; i++) {
-      distSq += Math.pow(vector[i] - item.vector[i], 2);
-    }
-    if (distSq < minDist) {
-      minDist = distSq;
-      bestLabel = item.label;
-    }
+    for (let i = 0; i < 63; i++) distSq += Math.pow(vector[i] - item.vector[i], 2);
+    if (distSq < minDist) { minDist = distSq; bestLabel = item.label; }
   }
   
-  // Reject if the hand shape is too far from any trained memory (Threshold: 1.15)
   return minDist < 1.15 ? bestLabel : '';
 }
 
-/**
- * Hardcoded Structural Analysis for built-in ASL and Control overrides.
- */
 function classifyRuleBased(lm: Landmark[]): string {
   const wrist = lm[0];
   const palmScale = Math.max(distance2D(wrist, lm[9]), 0.05);
-  
-  // Normalized distance helper to handle depth changes
   const nd = (a: Landmark, b: Landmark) => distance2D(a, b) / palmScale;
   
-  // Finger state evaluation
-  const isThumbUp = lm[4].y < lm[3].y && lm[4].y < lm[5].y - palmScale * 0.2;
   const isThumbDown = lm[4].y > lm[3].y && lm[4].y > lm[5].y + palmScale * 0.3;
-  
   const isIndexUp = lm[8].y < lm[6].y && nd(lm[8], wrist) > nd(lm[5], wrist);
   const isMiddleUp = lm[12].y < lm[10].y && nd(lm[12], wrist) > nd(lm[9], wrist);
   const isRingUp = lm[16].y < lm[14].y && nd(lm[16], wrist) > nd(lm[13], wrist);
@@ -155,52 +127,34 @@ function classifyRuleBased(lm: Landmark[]): string {
   
   const allFingersClosed = !isIndexUp && !isMiddleUp && !isRingUp && !isPinkyUp;
 
-  // 1. SYSTEM CONTROLS (Only 2 extra signs as requested)
-  // CLEAR: Strict Thumb Down, fingers curled
-  if (isThumbDown && allFingersClosed) return 'CLEAR';
-  
-  // SEND: Index and Pinky Up, Middle and Ring curled (Rock on sign)
-  if (isIndexUp && !isMiddleUp && !isRingUp && isPinkyUp) return 'SEND';
+  // SYSTEM CONTROLS
+  if (isThumbDown && allFingersClosed) return 'CLEAR'; // Thumb pointing down
+  if (isIndexUp && !isMiddleUp && !isRingUp && isPinkyUp) return 'SEND'; // Rock on sign
 
-  // 2. ASL ALPHABET FALLBACKS
-  if (isIndexUp && isMiddleUp && isRingUp && isPinkyUp) {
-    return nd(lm[4], lm[5]) < 0.6 ? 'B' : ''; // Thumb tucked
-  }
+  // ASL ALPHABET (Background Engine)
+  if (isIndexUp && isMiddleUp && isRingUp && isPinkyUp) return nd(lm[4], lm[5]) < 0.6 ? 'B' : ''; 
   if (isIndexUp && isMiddleUp && isRingUp && !isPinkyUp) return 'W';
-  if (!isIndexUp && !isMiddleUp && !isRingUp && isPinkyUp) {
-    return distance2D(lm[4], lm[17]) > distance2D(lm[2], lm[17]) * 1.2 ? 'Y' : 'I';
-  }
-  if (isIndexUp && isMiddleUp && !isRingUp && !isPinkyUp) {
-    return nd(lm[8], lm[12]) > 0.35 ? 'V' : 'U';
-  }
-  if (isIndexUp && !isMiddleUp && !isRingUp && !isPinkyUp) {
-    return nd(lm[4], lm[8]) > 0.85 ? 'L' : 'D';
-  }
+  if (!isIndexUp && !isMiddleUp && !isRingUp && isPinkyUp) return distance2D(lm[4], lm[17]) > distance2D(lm[2], lm[17]) * 1.2 ? 'Y' : 'I';
+  if (isIndexUp && isMiddleUp && !isRingUp && !isPinkyUp) return nd(lm[8], lm[12]) > 0.35 ? 'V' : 'U';
+  if (isIndexUp && !isMiddleUp && !isRingUp && !isPinkyUp) return nd(lm[4], lm[8]) > 0.85 ? 'L' : 'D';
   if (allFingersClosed) {
     if (lm[4].y < lm[6].y + palmScale * 0.1 && lm[4].x > lm[6].x) return 'A';
     if (lm[4].y > lm[6].y && lm[4].x < lm[6].x) return 'S';
     return 'E';
   }
-
   return '';
 }
 
-// ============================================================================
-// HARDWARE INITIALIZATION
-// ============================================================================
 async function getLandmarker(): Promise<HandLandmarker> {
   if (!landmarkerPromise) {
     landmarkerPromise = FilesetResolver.forVisionTasks(WASM_PATH).then(vision => 
       HandLandmarker.createFromOptions(vision, {
-        baseOptions: { 
-          modelAssetPath: MODEL_PATH, 
-          delegate: 'CPU' // CPU delegate ensures perfect stability on Tab/Mobile without GPU crashing
-        },
+        baseOptions: { modelAssetPath: MODEL_PATH, delegate: 'CPU' },
         runningMode: 'VIDEO', 
         numHands: 2,
-        minHandDetectionConfidence: 0.48, 
-        minHandPresenceConfidence: 0.48,
-        minTrackingConfidence: 0.48
+        minHandDetectionConfidence: 0.45, 
+        minHandPresenceConfidence: 0.45,
+        minTrackingConfidence: 0.45
       })
     );
   }
@@ -208,27 +162,61 @@ async function getLandmarker(): Promise<HandLandmarker> {
 }
 
 // ============================================================================
-// SYSTEM BRIDGE INVOCATION
+// UNIVERSAL WEB CURSOR & NATIVE BRIDGE
 // ============================================================================
-function transmitMouseCoordinates(visible: boolean, x = 0.5, y = 0.5, pinching = false) {
-  const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
-  if (bridge?.updateAirMouse) {
-    try {
-      bridge.updateAirMouse(visible, x, y, pinching);
-    } catch (e) {
-      console.error("Hardware bridge transmission failed.");
-    }
+function getOrCreateWebCursor() {
+  let cursor = document.getElementById('nova-web-cursor');
+  if (!cursor) {
+    cursor = document.createElement('div');
+    cursor.id = 'nova-web-cursor';
+    Object.assign(cursor.style, {
+      position: 'fixed',
+      width: '24px',
+      height: '24px',
+      borderRadius: '50%',
+      backgroundColor: 'rgba(16, 185, 129, 0.7)',
+      border: '2px solid rgba(255, 255, 255, 0.9)',
+      boxShadow: '0 0 15px rgba(16, 185, 129, 0.8)',
+      pointerEvents: 'none',
+      zIndex: '999999',
+      transform: 'translate(-50%, -50%)',
+      display: 'none',
+      transition: 'transform 0.1s ease, background-color 0.15s ease, box-shadow 0.15s ease'
+    });
+    document.body.appendChild(cursor);
   }
+  return cursor;
 }
 
-function invokeHardwareScroll(direction: 'up' | 'down') {
+function transmitMouseCoordinates(visible: boolean, x = 0.5, y = 0.5, pinching = false) {
+  // 1. Android Native Bridge (For APK)
   const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
-  if (direction === 'up') {
-    window.scrollBy({ top: -SCROLL_VELOCITY, behavior: 'auto' });
-    bridge?.swipeScreen?.(500, 450, 500, 1200, 260);
+  if (bridge?.updateAirMouse) {
+    try { bridge.updateAirMouse(visible, x, y, pinching); } catch (e) {}
+  }
+  
+  // 2. Web Fallback Cursor (For Laptop/Tab/Browser)
+  const cursor = getOrCreateWebCursor();
+  if (visible) {
+    cursor.style.display = 'block';
+    // Map normalized coordinates directly to screen Viewport (vw/vh)
+    cursor.style.left = `${x * 100}vw`;
+    cursor.style.top = `${y * 100}vh`;
+    
+    // Visual Feedback for Clicking
+    if (pinching) {
+      cursor.style.transform = 'translate(-50%, -50%) scale(0.65)';
+      cursor.style.backgroundColor = 'rgba(255, 60, 60, 0.9)'; // Turns RED on click
+      cursor.style.boxShadow = '0 0 20px rgba(255, 60, 60, 0.9)';
+      cursor.style.border = '2px solid rgba(255, 255, 255, 1)';
+    } else {
+      cursor.style.transform = 'translate(-50%, -50%) scale(1)';
+      cursor.style.backgroundColor = 'rgba(16, 185, 129, 0.7)'; // Standard GREEN
+      cursor.style.boxShadow = '0 0 15px rgba(16, 185, 129, 0.8)';
+      cursor.style.border = '2px solid rgba(255, 255, 255, 0.9)';
+    }
   } else {
-    window.scrollBy({ top: SCROLL_VELOCITY, behavior: 'auto' });
-    bridge?.swipeScreen?.(500, 1200, 500, 450, 260);
+    cursor.style.display = 'none';
   }
 }
 
@@ -241,42 +229,30 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
     
-    video.playsInline = true;
-    video.muted = true;
-    if (video.paused && video.srcObject) {
-      video.play().catch(() => {});
-    }
+    video.playsInline = true; video.muted = true;
+    if (video.paused && video.srcObject) video.play().catch(() => {});
 
     const landmarker = await getLandmarker();
     const currentPerformanceTime = performance.now();
-    
-    // Ensure strict monotonic time progression for MediaPipe Engine
     lastVideoTime = currentPerformanceTime > lastVideoTime ? currentPerformanceTime : lastVideoTime + 1;
     
     const result = landmarker.detectForVideo(video, lastVideoTime);
     const hands = (result.landmarks || []) as Landmark[][];
     const now = Date.now();
 
-    // No hands detected: Auto-release tracking
+    // Auto-release tracking if hands disappear
     if (!hands.length) {
-      if (++releaseFrameCount >= 5) {
-        latchedSign = '';
-        candidateSign = '';
-      }
+      if (++releaseFrameCount >= 5) { latchedSign = ''; candidateSign = ''; }
       transmitMouseCoordinates(false);
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Toggle Wireless Mouse Mode: Two horizontal stacked hands
+    // Toggle Wireless Mouse (TWO HANDS STACKED VERTICALLY)
     if (hands.length === 2) {
       const verticalGap = Math.abs(hands[0][9].y - hands[1][9].y);
-      if (verticalGap > 0.12 && now - lastToggleTime > TOGGLE_COOLDOWN_MS) {
+      if (verticalGap > 0.10 && now - lastToggleTime > TOGGLE_COOLDOWN_MS) {
         mouselessMode = !mouselessMode;
         lastToggleTime = now;
-        
-        // Notify System HUD if active
-        const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
-        if (mouselessMode) bridge?.enableOverlayBubble?.();
       }
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
@@ -287,27 +263,27 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
     // 1. PALM-RAY WIRELESS MOUSE ENGINE
     // ========================================================================
     if (mouselessMode) {
-      // Anchor tracking strictly to the Knuckles (MCP 5 & 8) to prevent pinch-jerk
+      // Anchor tracking strictly to the Knuckles (MCP 5 & 8) for rock-solid stability
       const anchorX = (primaryHand[5].x * 0.65 + primaryHand[8].x * 0.35); 
       const anchorY = (primaryHand[5].y * 0.65 + primaryHand[8].y * 0.35);
       
-      // Calculate Active Region of Interest (Removes physical strain of reaching camera edges)
+      // Calculate Active Region (Allows cursor to reach screen edges easily)
       const rawNormX = (anchorX - ACTIVE_ROI_MARGIN) / (1 - ACTIVE_ROI_MARGIN * 2);
       const rawNormY = (anchorY - ACTIVE_ROI_MARGIN) / (1 - ACTIVE_ROI_MARGIN * 2);
       
-      // Clamp coordinates to screen boundaries
-      const targetX = Math.max(0.01, Math.min(0.99, rawNormX));
+      // Mirror the X coordinate so it moves intuitively like a real mouse
+      const mirroredX = 1.0 - rawNormX;
+      
+      const targetX = Math.max(0.01, Math.min(0.99, mirroredX));
       const targetY = Math.max(0.01, Math.min(0.99, rawNormY));
 
-      // Dynamic Smoothing (1-Euro Filter simulation)
+      // Dynamic Smoothing (1-Euro Filter)
       const velocity = Math.hypot(targetX - prevTargetX, targetY - prevTargetY);
-      prevTargetX = targetX; 
-      prevTargetY = targetY;
+      prevTargetX = targetX; prevTargetY = targetY;
       
-      // Alpha calculates tracking stiffness based on speed
       let alpha = 0.4;
-      if (velocity < 0.005) alpha = 0.12;       // High stiffness for stable clicking
-      else if (velocity > 0.06) alpha = 0.85;   // Low stiffness for fast movement
+      if (velocity < 0.005) alpha = 0.15;       // High stiffness for stable clicking
+      else if (velocity > 0.05) alpha = 0.85;   // Low stiffness for fast movement
       
       filteredX = filteredX * (1 - alpha) + targetX * alpha;
       filteredY = filteredY * (1 - alpha) + targetY * alpha;
@@ -317,21 +293,22 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       if (!isPinching && pinchDistance < PINCH_DOWN_THRESH) isPinching = true;
       else if (isPinching && pinchDistance > PINCH_UP_THRESH) isPinching = false;
 
-      // Hardware execution
+      // Transmit to screen
       transmitMouseCoordinates(true, filteredX, filteredY, isPinching);
 
       // Edge Scrolling Logic
-      if (filteredY < SCROLL_TRIGGER_ZONE) invokeHardwareScroll('up');
-      if (filteredY > 1 - SCROLL_TRIGGER_ZONE) invokeHardwareScroll('down');
+      if (filteredY < SCROLL_TRIGGER_ZONE) window.scrollBy({ top: -SCROLL_VELOCITY });
+      if (filteredY > 1 - SCROLL_TRIGGER_ZONE) window.scrollBy({ top: SCROLL_VELOCITY });
 
       // Click Dispatch
       if (isPinching && now - lastClickTime > 650) {
         lastClickTime = now;
-        const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
-        bridge?.clickAirMouse?.(filteredX, filteredY);
         
-        // Dispatch synthetic web click
-        const element = document.elementFromPoint(filteredX * window.innerWidth, filteredY * window.innerHeight);
+        // Dispatch synthetic web click precisely where the cursor is
+        const clickX = filteredX * window.innerWidth;
+        const clickY = filteredY * window.innerHeight;
+        const element = document.elementFromPoint(clickX, clickY);
+        
         if (element instanceof HTMLElement) {
           element.click();
           element.focus();
@@ -343,6 +320,7 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
     // ========================================================================
     // 2. GESTURE & SIGN DETECTION ENGINE
     // ========================================================================
+    transmitMouseCoordinates(false); // Hide cursor when not in mouse mode
     const neuralVector = normalizeVector(primaryHand);
 
     // Capture Mode: Save neural mapping directly to device
@@ -353,18 +331,15 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Inference: Prioritize Custom ML Database -> Fallback to Rigid Rules
+    // Inference
     let detectedSign = classifyWithML(neuralVector) || classifyRuleBased(primaryHand);
 
     if (!detectedSign) {
-      if (++releaseFrameCount >= 5) {
-        latchedSign = '';
-        candidateSign = '';
-      }
+      if (++releaseFrameCount >= 5) { latchedSign = ''; candidateSign = ''; }
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
-    // Temporal Consensus Stabilization (Anti-Jitter Latch)
+    // Temporal Consensus Stabilization
     releaseFrameCount = 0;
     if (now - lastEmittedTime < POST_EMIT_COOLDOWN_MS) return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     if (detectedSign === latchedSign) return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
@@ -388,15 +363,9 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
     return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     
   } catch (error) {
-    console.error("Local Vision Engine Error:", error);
     return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
   }
 }
 
-export async function isLocalVisionModelAvailable() { 
-  return true; 
-}
-
-export function applyCustomGesture(res: VisionResult, _: CustomGesture[]) { 
-  return res; 
-}
+export async function isLocalVisionModelAvailable() { return true; }
+export function applyCustomGesture(res: VisionResult, _: CustomGesture[]) { return res; }
