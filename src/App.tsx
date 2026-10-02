@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Copy, Mic, MicOff, Moon, Paperclip, Send, Settings, Sparkles, Sun, Trash2, User, X } from 'lucide-react';
+import { Bot, Copy, History, Mic, MicOff, Moon, Paperclip, Plus, Send, Settings, Sparkles, Sun, User, X } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
 import type { MessageAttachment } from './services/hybridAI';
@@ -11,7 +11,7 @@ import type { AppSettings, Message, VisionResult } from './types';
 import './styles.css';
 
 const defaults: AppSettings = {
-  theme: 'dark', voiceEnabled: true, visionEnabled: false, confidenceThreshold: 0.72,
+  theme: 'light', voiceEnabled: true, visionEnabled: false, confidenceThreshold: 0.72,
   aiProvider: 'cloudFree', ollamaUrl: 'http://localhost:11434', ollamaModel: 'qwen2.5:1.5b', geminiModel: 'gemini-2.5-flash',
   cloudFreeBaseUrl: 'https://api.groq.com/openai/v1', cloudFreeApiKey: '', cloudFreeModel: 'llama-3.3-70b-versatile',
   webllmModel: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
@@ -36,11 +36,34 @@ function executeAndroidAgentCommand(rawText: string): string | null {
   return null;
 }
 
+interface ChatSession { id: string; title: string; messages: Message[]; updatedAt: number; }
+const WELCOME: Message = { id: 'welcome', role: 'model', text: 'Hello. I am NOVA Gesture AI.\n\nI can combine local sign recognition, custom gestures and an AI model. You can also teach me new hand signs below the camera.', timestamp: Date.now() };
+
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => {
     try { return { ...defaults, ...JSON.parse(localStorage.getItem('nova-unified-settings') || '{}') }; } catch { return defaults; }
   });
-  const [messages, setMessages] = useState<Message[]>([{ id: 'welcome', role: 'model', text: 'Hello. I am NOVA Gesture AI.\n\nI can combine local sign recognition, custom gestures and an AI model. You can also teach me new hand signs below the camera.', timestamp: Date.now() }]);
+  const [messages, setMessages] = useState<Message[]>([WELCOME]);
+  const [history, setHistory] = useState<ChatSession[]>(() => {
+    try { return JSON.parse(localStorage.getItem('nova-chat-history') || '[]'); } catch { return []; }
+  });
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const currentSessionId = useRef<string>(crypto.randomUUID());
+
+  const saveHistory = (list: ChatSession[]) => { setHistory(list); localStorage.setItem('nova-chat-history', JSON.stringify(list)); };
+
+  const persistCurrentSession = useCallback((msgs: Message[]) => {
+    const realMsgs = msgs.filter(m => m.id !== 'welcome');
+    if (realMsgs.length === 0) return;
+    const title = realMsgs.find(m => m.role === 'user')?.text.slice(0, 48) || 'Conversation';
+    const entry: ChatSession = { id: currentSessionId.current, title, messages: msgs, updatedAt: Date.now() };
+    const rest = history.filter(h => h.id !== entry.id);
+    saveHistory([entry, ...rest].slice(0, 50));
+  }, [history]);
+
+  const startNewChat = () => { persistCurrentSession(messages); currentSessionId.current = crypto.randomUUID(); setMessages([WELCOME]); };
+  const loadSession = (id: string) => { const s = history.find(h => h.id === id); if (!s) return; persistCurrentSession(messages); currentSessionId.current = s.id; setMessages(s.messages); setHistoryOpen(false); };
+  const deleteSession = (id: string) => saveHistory(history.filter(h => h.id !== id));
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [learnLabel, setLearnLabel] = useState('');
@@ -54,6 +77,7 @@ export default function App() {
 
   useEffect(() => { localStorage.setItem('nova-unified-settings', JSON.stringify(settings)); document.documentElement.dataset.theme = settings.theme; }, [settings]);
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, typing]);
+  useEffect(() => { if (messages.some(m => m.id !== 'welcome')) persistCurrentSession(messages); }, [messages]);
 
   const speak = useCallback((text: string) => {
     if (!settings.voiceEnabled || !('speechSynthesis' in window)) return;
@@ -116,7 +140,7 @@ export default function App() {
   const themeIcon = settings.theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>;
 
   return <div className="app">
-    <header><div className="brand"><div className="logo"><Sparkles size={20}/></div><div><h1>NOVA GESTURE AI</h1><span><i/> {provider}</span></div></div><div className="header-actions"><button title="Voice" onClick={() => setSettings(s => ({ ...s, voiceEnabled: !s.voiceEnabled }))}>{settings.voiceEnabled ? <Mic/> : <MicOff/>}</button><button title="Theme" onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}>{themeIcon}</button><button title="Settings" onClick={() => setSettingsOpen(true)}><Settings/></button></div></header>
+    <header><div className="brand"><div className="logo"><Sparkles size={20}/></div><div><h1>NOVA GESTURE AI</h1><span><i/> {provider}</span></div></div><div className="header-actions"><button title="Chat history" onClick={() => setHistoryOpen(true)}><History/></button><button title="Voice" onClick={() => setSettings(s => ({ ...s, voiceEnabled: !s.voiceEnabled }))}>{settings.voiceEnabled ? <Mic/> : <MicOff/>}</button><button title="Theme" onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}>{themeIcon}</button><button title="Settings" onClick={() => setSettingsOpen(true)}><Settings/></button></div></header>
     <main>
       <aside>
         <CameraView videoRef={vision.videoRef} enabled={settings.visionEnabled} status={vision.status} lastDetection={vision.lastDetection} onToggle={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} settings={settings}/>
@@ -125,12 +149,21 @@ export default function App() {
           <button className="secondary" onClick={() => { if (learnLabel.trim()) { learnSign(learnLabel.trim()); setLearnLabel(''); } }}>Teach this sign</button>
         </div>}
       </aside>
-      <section className="chat"><div className="chat-head"><div><b>Assistant</b><span>Sign language companion</span></div><button onClick={() => setMessages([])}><Trash2 size={16}/> Clear</button></div><div className="messages">{messages.map(m => <div key={m.id} className={`message ${m.role}`}><div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div><div className="bubble"><div>{m.text}</div>{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div></div>)}{typing && <div className="message model"><div className="avatar"><Bot size={15}/></div><div className="bubble dots">● ● ●</div></div>}<div ref={chatEnd}/></div>
+      <section className="chat"><div className="chat-head"><div><b>Assistant</b><span>Sign language companion</span></div><div className="chat-head-actions"><button onClick={() => setHistoryOpen(true)}><History size={14}/> History</button><button onClick={startNewChat}><Plus size={14}/> New chat</button></div></div><div className="messages">{messages.map(m => <div key={m.id} className={`message ${m.role}`}><div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div><div className="bubble"><div>{m.text}</div>{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div></div>)}{typing && <div className="message model"><div className="avatar"><Bot size={15}/></div><div className="bubble dots">● ● ●</div></div>}<div ref={chatEnd}/></div>
         {attachments.length > 0 && <div className="attachments-row">{attachments.map((a, i) => <span key={i} className="attachment-chip">{a.name}<button onClick={() => setAttachments(prev => prev.filter((_, idx) => idx !== i))}><X size={12}/></button></span>)}</div>}
         <input ref={fileInputRef} type="file" multiple hidden onChange={onFilePicked} />
         <div className="composer"><button className={listening ? 'active mic' : 'mic'} onClick={toggleMic}>{listening ? <MicOff/> : <Mic/>}</button><button className="mic" title="Attach file" onClick={() => fileInputRef.current?.click()}><Paperclip/></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} placeholder="Type, speak, or use a sign…"/><button className="send" onClick={() => send()} disabled={(!input.trim() && attachments.length === 0) || typing}><Send/></button></div></section>
     </main>
     {settingsOpen && <SettingsPanel settings={settings} onUpdate={setSettings} onClose={() => setSettingsOpen(false)}/>}
+    {historyOpen && <div className="modal-backdrop"><section className="history-panel">
+      <div className="settings-head"><div><b>Chat history</b><span>{history.length} saved conversation{history.length === 1 ? '' : 's'}</span></div><button onClick={() => setHistoryOpen(false)}><X/></button></div>
+      {history.length === 0 && <div className="history-empty">No saved conversations yet — they're saved automatically as you chat.</div>}
+      {history.sort((a, b) => b.updatedAt - a.updatedAt).map(s => <div className="history-item" key={s.id}>
+        <button className="load" onClick={() => loadSession(s.id)}>{s.title}<small>{new Date(s.updatedAt).toLocaleString()}</small></button>
+        <button className="del" onClick={() => deleteSession(s.id)}><X size={14}/></button>
+      </div>)}
+      <div className="settings-foot"><button className="primary" onClick={startNewChat}><Plus size={16}/> New chat</button></div>
+    </section></div>}
   </div>;
 }
 
