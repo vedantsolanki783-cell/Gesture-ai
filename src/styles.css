@@ -41,9 +41,9 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 .attachments-row{display:flex;gap:6px;flex-wrap:wrap;padding:0 0 8px}
 .attachment-chip{display:flex;align-items:center;gap:4px;background:#eff6ff;border:1px solid #dbeafe;border-radius:999px;padding:4px 10px;font-size:11px;color:#1d4ed8}
 .attachment-chip button{display:flex;color:#60a5fa}
-.mouseless-badge{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;background:#3b82f6;color:#fff;padding:6px 14px;border-radius:999px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px}
-.mouseless-cursor{position:fixed;width:24px;height:24px;border-radius:50%;border:3px solid #3b82f6;z-index:9999;pointer-events:none;transition:background .1s}
-
+.mode-toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:9999;background:#1d4ed8;color:#fff;padding:8px 16px;border-radius:999px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:7px;box-shadow:0 6px 18px rgba(29,78,216,.35);animation:nova-toast-in .2s ease-out}
+:root[data-theme="dark"] .mode-toast{background:#3b82f6}
+@keyframes nova-toast-in{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}
 .chat{flex:1;min-height:0;display:flex;flex-direction:column}
 .chat-head{padding:6px 0 10px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex:none}
 :root[data-theme="dark"] .chat-head{border-color:#1e293b}
