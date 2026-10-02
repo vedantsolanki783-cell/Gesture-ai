@@ -30,14 +30,22 @@ const CONFIG = {
   GESTURE_LATCH_DELAY_MS: 500,      // Milliseconds required to hold a sign perfectly still
   GESTURE_COOLDOWN_MS: 1000,        // Cooldown period after a successful sign emission
 
-  // --- Wireless mouse tuning (sensitivity pass) ---
-  TOGGLE_LATCH_DELAY_MS: 650,       // Time required to hold the two-hand toggle (was 900 — faster now)
-  MOUSE_PINCH_DOWN_THRESH: 0.052,   // Distance to trigger a click (was 0.042 — more forgiving)
-  MOUSE_PINCH_UP_THRESH: 0.078,     // Hysteresis release distance (was 0.065)
-  MOUSE_ROI_MARGIN: 0.10,           // Dead-zone margin around camera edge (was 0.16 — easier to reach edges)
+  // --- Wireless mouse tuning (sensitivity pass 2 — ray-cast + scale-normalized pinch) ---
+  TOGGLE_LATCH_DELAY_MS: 650,
+  // Pinch thresholds are now normalized against the hand's own index-knuckle
+  // length (see REF_LENGTH below), same trick your reference Python engine
+  // uses — this makes click sensitivity consistent whether your hand is
+  // close to or far from the camera, instead of a fixed pixel-ish distance.
+  MOUSE_PINCH_DOWN_THRESH: 0.55,
+  MOUSE_PINCH_UP_THRESH: 0.75,
+  MOUSE_ROI_MARGIN: 0.10,
   SCROLL_TRIGGER_ZONE: 0.12,
-  SCROLL_VELOCITY: 34,              // Scroll speed px/frame (was 28 — snappier)
-  CLICK_COOLDOWN_MS: 480            // Minimum time between clicks (was 650 — snappier repeat clicks)
+  SCROLL_VELOCITY: 34,
+  CLICK_COOLDOWN_MS: 480,
+  // "Ray cast" reach: how far the cursor projects along the direction your
+  // hand is tilted, on top of plain palm position. Higher = more reach from
+  // less hand movement (more sensitive), like pointing with a laser.
+  RAY_REACH: 0.3
 };
 
 // ====================================================================================================
@@ -405,6 +413,9 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
         const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
         if (isMouseActive) bridge?.enableOverlayBubble?.();
         else transmitMouseCoordinates(false);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('nova-mode-switch', { detail: isMouseActive ? 'mouse' : 'asl' }));
+        }
         console.log(`[ULTRON] Wireless Mouse Engine: ${isMouseActive ? 'ENGAGED' : 'DISENGAGED'}`);
       }
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
@@ -414,52 +425,80 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
     const primaryHand = hands[0];
 
     // STATE 2: WIRELESS MOUSE ACTIVE
+    // Upgraded using ideas from your reference Palm Ray Engine:
+    //  - pointer position now uses a "ray cast" (palm center + hand-tilt
+    //    direction) instead of plain palm position, so tilting your hand
+    //    reaches further across the screen with less physical movement
+    //  - pinch distance is normalized against your own index-knuckle length
+    //    (REF_LENGTH) instead of a fixed distance, so click sensitivity
+    //    stays consistent whether your hand is near or far from the camera
+    //  - added a middle-finger+thumb pinch as a right-click, same as the
+    //    reference engine's left/right click split
     if (isMouseActive) {
       const anatomy = analyzeAnatomy(primaryHand);
+      const v = anatomy.v;
 
-      const rawAnchorX = (primaryHand[0].x * 0.4 + primaryHand[5].x * 0.3 + primaryHand[17].x * 0.3); 
-      const rawAnchorY = (primaryHand[0].y * 0.4 + primaryHand[5].y * 0.3 + primaryHand[17].y * 0.3);
-      
-      const expandedX = (rawAnchorX - CONFIG.MOUSE_ROI_MARGIN) / (1 - CONFIG.MOUSE_ROI_MARGIN * 2);
-      const expandedY = (rawAnchorY - CONFIG.MOUSE_ROI_MARGIN) / (1 - CONFIG.MOUSE_ROI_MARGIN * 2);
-      
+      // Scale reference: index MCP→PIP length, same trick the Python engine
+      // uses, so thresholds below are resolution/distance independent.
+      const REF_LENGTH = Math.max(v(5).sub(v(6)).mag(), 0.0001);
+
+      // Palm center (wrist + index MCP + pinky MCP, weighted like the ref engine)
+      const palmCenterX = (primaryHand[0].x * 0.4 + primaryHand[5].x * 0.3 + primaryHand[17].x * 0.3);
+      const palmCenterY = (primaryHand[0].y * 0.4 + primaryHand[5].y * 0.3 + primaryHand[17].y * 0.3);
+
+      // Hand-tilt direction: wrist → middle-finger MCP. Projecting the palm
+      // center further along this vector is the "ray cast" — tilt your hand
+      // toward a screen edge and the cursor leads further that way.
+      const dirX = primaryHand[9].x - primaryHand[0].x;
+      const dirY = primaryHand[9].y - primaryHand[0].y;
+      const rayX = palmCenterX + dirX * CONFIG.RAY_REACH;
+      const rayY = palmCenterY + dirY * CONFIG.RAY_REACH;
+
+      const expandedX = (rayX - CONFIG.MOUSE_ROI_MARGIN) / (1 - CONFIG.MOUSE_ROI_MARGIN * 2);
+      const expandedY = (rayY - CONFIG.MOUSE_ROI_MARGIN) / (1 - CONFIG.MOUSE_ROI_MARGIN * 2);
+
       const mirroredX = 1.0 - expandedX;
-      
+
       const targetX = Math.max(0.01, Math.min(0.99, mirroredX));
       const targetY = Math.max(0.01, Math.min(0.99, expandedY));
 
       const smoothedX = mouseFilterX.filter(targetX, now);
       const smoothedY = mouseFilterY.filter(targetY, now);
 
-      const pinchDistance = anatomy.v(8).sub(anatomy.v(4)).mag();
-      
-      if (!isPinching && pinchDistance < CONFIG.MOUSE_PINCH_DOWN_THRESH) {
+      // Left click: index tip ↔ thumb tip, normalized by hand scale
+      const leftPinchDist = v(8).sub(v(4)).mag() / REF_LENGTH;
+      if (!isPinching && leftPinchDist < CONFIG.MOUSE_PINCH_DOWN_THRESH) {
         isPinching = true;
-      } else if (isPinching && pinchDistance > CONFIG.MOUSE_PINCH_UP_THRESH) {
+      } else if (isPinching && leftPinchDist > CONFIG.MOUSE_PINCH_UP_THRESH) {
         isPinching = false;
       }
 
-      transmitMouseCoordinates(true, smoothedX, smoothedY, isPinching);
+      // Right click (new): middle tip ↔ thumb tip, same normalized scale
+      const rightPinchDist = v(12).sub(v(4)).mag() / REF_LENGTH;
+      const isRightPinching = rightPinchDist < CONFIG.MOUSE_PINCH_DOWN_THRESH;
+
+      transmitMouseCoordinates(true, smoothedX, smoothedY, isPinching || isRightPinching);
 
       if (smoothedY < CONFIG.SCROLL_TRIGGER_ZONE) invokeHardwareScroll('up');
       if (smoothedY > 1 - CONFIG.SCROLL_TRIGGER_ZONE) invokeHardwareScroll('down');
 
+      const viewportX = smoothedX * window.innerWidth;
+      const viewportY = smoothedY * window.innerHeight;
+
       if (isPinching && now - lastClickTime > CONFIG.CLICK_COOLDOWN_MS) {
         lastClickTime = now;
-        
         const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
         bridge?.clickAirMouse?.(smoothedX, smoothedY);
-        
-        const viewportX = smoothedX * window.innerWidth;
-        const viewportY = smoothedY * window.innerHeight;
         const targetElement = document.elementFromPoint(viewportX, viewportY);
-        
-        if (targetElement instanceof HTMLElement) {
-          targetElement.click();
-          targetElement.focus();
-        }
+        if (targetElement instanceof HTMLElement) { targetElement.click(); targetElement.focus(); }
+      } else if (isRightPinching && now - lastClickTime > CONFIG.CLICK_COOLDOWN_MS) {
+        lastClickTime = now;
+        const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
+        bridge?.rightClickAirMouse?.(smoothedX, smoothedY);
+        const targetElement = document.elementFromPoint(viewportX, viewportY);
+        targetElement?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: viewportX, clientY: viewportY }));
       }
-      
+
       return { type: 'UNKNOWN', value: '', confidence: 0, source: 'local' };
     }
 
