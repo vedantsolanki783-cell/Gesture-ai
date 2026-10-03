@@ -28,7 +28,7 @@ const CONFIG = {
   // --- FINAL BOSS WIRELESS MOUSE TUNING ---
   TOGGLE_LATCH_DELAY_MS: 650,
   
-  // Pinch thresholds increased: Triggers clicks much earlier before fingers fully touch
+  // Hysteresis Pinch thresholds
   MOUSE_PINCH_DOWN_THRESH: 0.85,
   MOUSE_PINCH_UP_THRESH: 1.15,
   
@@ -38,8 +38,8 @@ const CONFIG = {
   SCROLL_TRIGGER_ZONE: 0.16,
   SCROLL_BASE_VELOCITY: 35,
   
-  // Rapid fire clicking enabled
-  CLICK_COOLDOWN_MS: 200,
+  // Maximum hand speed allowed while clicking to prevent swipe-clicks (stops false triggers)
+  MAX_CLICK_VELOCITY: 0.04,
   
   RAY_REACH: 0.25
 };
@@ -144,8 +144,13 @@ let releaseFrameCount = 0;
 let isMouseActive = false;
 let lastToggleTime = 0;
 let toggleCandidateStart = 0;
-let lastClickTime = 0;
+
+// Re-engineered Pinch & Click Locks
 let isPinching = false;
+let leftPinchHandled = false; 
+let isRightPinching = false;
+let rightPinchHandled = false;
+let previousPalmCenter = { x: 0, y: 0 };
 
 let candidateSign = '';
 let latchedSign = '';
@@ -287,12 +292,12 @@ function getOrCreateWebCursor() {
     cursor = document.createElement('div');
     cursor.id = 'nova-finalboss-cursor';
     Object.assign(cursor.style, {
-      position: 'fixed', width: '26px', height: '26px', borderRadius: '50%',
+      position: 'fixed', left: '0px', top: '0px', width: '26px', height: '26px', borderRadius: '50%',
       backgroundColor: 'rgba(16, 185, 129, 0.85)', border: '2px solid rgba(255, 255, 255, 1)',
       boxShadow: '0 0 18px rgba(16, 185, 129, 0.95)', pointerEvents: 'none', zIndex: '999999',
-      transform: 'translate(-50%, -50%)', display: 'none',
-      willChange: 'left, top, transform, background-color', 
-      transition: 'background-color 0.08s ease-out, transform 0.08s ease-out'
+      transform: 'translate3d(-100px, -100px, 0)', display: 'none',
+      willChange: 'transform, background-color', 
+      transition: 'background-color 0.08s ease-out' // Removed transform transition to kill lag
     });
     document.body.appendChild(cursor);
   }
@@ -308,15 +313,14 @@ function transmitMouseCoordinates(visible: boolean, x = 0.5, y = 0.5, pinching =
   const cursor = getOrCreateWebCursor();
   if (visible) {
     cursor.style.display = 'block';
-    cursor.style.left = `${x * 100}vw`;
-    cursor.style.top = `${y * 100}vh`;
     
+    // Hardware GPU Accelerated positioning instead of CPU layout thrashing
     if (pinching) {
-      cursor.style.transform = 'translate(-50%, -50%) scale(0.5)';
+      cursor.style.transform = `translate3d(${x * 100}vw, ${y * 100}vh, 0) translate(-50%, -50%) scale(0.5)`;
       cursor.style.backgroundColor = 'rgba(239, 68, 68, 1)';
       cursor.style.boxShadow = '0 0 25px rgba(239, 68, 68, 1)';
     } else {
-      cursor.style.transform = 'translate(-50%, -50%) scale(1)';
+      cursor.style.transform = `translate3d(${x * 100}vw, ${y * 100}vh, 0) translate(-50%, -50%) scale(1)`;
       cursor.style.backgroundColor = 'rgba(16, 185, 129, 0.85)';
       cursor.style.boxShadow = '0 0 18px rgba(16, 185, 129, 0.95)';
     }
@@ -386,6 +390,7 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
     }
     toggleCandidateStart = 0;
 
+    // We strictly use hand 0 for all logic now to prevent "2 dot" cross-tracking
     const primaryHand = hands[0];
 
     // STATE 2: WIRELESS MOUSE ACTIVE
@@ -397,6 +402,12 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
 
       const palmCenterX = (primaryHand[0].x * 0.4 + primaryHand[5].x * 0.3 + primaryHand[17].x * 0.3);
       const palmCenterY = (primaryHand[0].y * 0.4 + primaryHand[5].y * 0.3 + primaryHand[17].y * 0.3);
+
+      // Velocity Tracking to prevent false clicks when hand is moving fast
+      const velX = palmCenterX - previousPalmCenter.x;
+      const velY = palmCenterY - previousPalmCenter.y;
+      const handVelocity = Math.sqrt(velX * velX + velY * velY);
+      previousPalmCenter = { x: palmCenterX, y: palmCenterY };
 
       const dirX = primaryHand[9].x - primaryHand[0].x;
       const dirY = primaryHand[9].y - primaryHand[0].y;
@@ -414,16 +425,24 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       const smoothedX = mouseFilterX.filter(targetX, now);
       const smoothedY = mouseFilterY.filter(targetY, now);
 
-      // Early Pinch Logic
+      // Safe Pinch Logic: Enforces Schmitt Trigger and requires hand release
       const leftPinchDist = v(8).sub(v(4)).mag() / REF_LENGTH;
       if (!isPinching && leftPinchDist < CONFIG.MOUSE_PINCH_DOWN_THRESH) {
         isPinching = true;
+        leftPinchHandled = false; // Reset lock
       } else if (isPinching && leftPinchDist > CONFIG.MOUSE_PINCH_UP_THRESH) {
         isPinching = false;
+        leftPinchHandled = false; // Reset lock
       }
 
       const rightPinchDist = v(12).sub(v(4)).mag() / REF_LENGTH;
-      const isRightPinching = rightPinchDist < CONFIG.MOUSE_PINCH_DOWN_THRESH;
+      if (!isRightPinching && rightPinchDist < CONFIG.MOUSE_PINCH_DOWN_THRESH) {
+        isRightPinching = true;
+        rightPinchHandled = false;
+      } else if (isRightPinching && rightPinchDist > CONFIG.MOUSE_PINCH_UP_THRESH) {
+        isRightPinching = false;
+        rightPinchHandled = false;
+      }
 
       transmitMouseCoordinates(true, smoothedX, smoothedY, isPinching || isRightPinching);
 
@@ -440,14 +459,16 @@ export async function localVision(video: HTMLVideoElement, _timestamp: number): 
       const viewportX = smoothedX * window.innerWidth;
       const viewportY = smoothedY * window.innerHeight;
 
-      if (isPinching && now - lastClickTime > CONFIG.CLICK_COOLDOWN_MS) {
-        lastClickTime = now;
+      // Click Trigger: Must be a new pinch (!handled) and hand must be relatively still
+      if (isPinching && !leftPinchHandled && handVelocity < CONFIG.MAX_CLICK_VELOCITY) {
+        leftPinchHandled = true; // Lock it so it doesn't fire 5 times a second
         const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
         bridge?.clickAirMouse?.(smoothedX, smoothedY);
         const targetElement = document.elementFromPoint(viewportX, viewportY);
         if (targetElement instanceof HTMLElement) { targetElement.click(); targetElement.focus(); }
-      } else if (isRightPinching && now - lastClickTime > CONFIG.CLICK_COOLDOWN_MS) {
-        lastClickTime = now;
+      } 
+      else if (isRightPinching && !rightPinchHandled && handVelocity < CONFIG.MAX_CLICK_VELOCITY) {
+        rightPinchHandled = true;
         const bridge = typeof window !== 'undefined' ? (window as any).NovaAndroid : null;
         bridge?.rightClickAirMouse?.(smoothedX, smoothedY);
         const targetElement = document.elementFromPoint(viewportX, viewportY);
