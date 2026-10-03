@@ -120,3 +120,27 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 .history-empty{color:#94a3b8;font-size:12px;padding:10px 0}
 
 @media(max-width:600px){main{padding:10px}header{padding:10px 14px}.brand h1{font-size:15px}.grid2{grid-template-columns:1fr}}
+
+/* ========================================================================== */
+/* ULTRON ZERO-LATENCY GPU CURSOR OVERRIDES                                   */
+/* ========================================================================== */
+body {
+  cursor: none !important; 
+}
+
+#nova-finalboss-cursor {
+  position: fixed;
+  left: 0px;
+  top: 0px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background-color: rgba(16, 185, 129, 0.85);
+  border: 2px solid rgba(255, 255, 255, 1);
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.95);
+  pointer-events: none; 
+  z-index: 999999;
+  transform: translate3d(-100px, -100px, 0);
+  display: none;
+  will-change: transform, background-color;
+}
