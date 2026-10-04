@@ -96,9 +96,60 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 .hero-text b{display:block;font-size:15px;font-weight:700;margin-top:4px}
 .hero-text p{margin:6px 0 16px;color:var(--muted);font-size:13px;max-width:280px}
 .hero-cta{background:var(--brand-grad);color:#fff;box-shadow:0 8px 20px rgba(129,140,248,.4)}
-.hero-orb{flex:none;width:140px;height:140px;border-radius:50%;background:radial-gradient(circle at 35% 30%, #1e293b, #0b1220 70%);box-shadow:0 0 0 10px rgba(255,255,255,.35), var(--shadow);display:grid;place-items:center}
-.orb-face{display:flex;gap:14px}
-.orb-face span{width:16px;height:7px;border-radius:4px;background:#22d3ee;box-shadow:0 0 10px #22d3ee}
+
+/* ---------------- NOVA 3D face (replaces the old flat orb) ---------------- */
+.nova-face{flex:none;perspective:900px}
+.nova-face-sphere{
+  width:100%;height:100%;border-radius:50%;position:relative;transform-style:preserve-3d;
+  transform:rotateX(var(--nf-tiltx,0deg)) rotateY(var(--nf-tilty,0deg));
+  transition:transform .5s cubic-bezier(.22,.9,.32,1);
+  background:
+    radial-gradient(circle at 32% 26%, rgba(255,255,255,.55), rgba(255,255,255,0) 22%),
+    radial-gradient(circle at 38% 32%, #27324a, #0a0f1c 68%);
+  box-shadow:
+    inset 0 -14px 24px rgba(0,0,0,.55),
+    inset 0 10px 18px rgba(255,255,255,.08),
+    0 0 0 6px rgba(255,255,255,.22),
+    0 8px 25px rgba(0,0,0,0.5);
+  animation:nova-breathe 4.5s ease-in-out infinite;
+}
+.nova-face-shine{
+  position:absolute;top:10%;left:16%;width:38%;height:28%;border-radius:50%;
+  background:radial-gradient(circle, rgba(255,255,255,.65), rgba(255,255,255,0) 70%);
+  filter:blur(1px);pointer-events:none;
+}
+.nova-face-rim{position:absolute;inset:0;border-radius:50%;box-shadow:inset 0 0 18px rgba(34,211,238,.18);pointer-events:none}
+.nova-face-eyes{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:14%}
+.nova-eye{
+  position:relative;width:22%;height:11%;border-radius:40%;background:#031014;
+  box-shadow:inset 0 0 4px rgba(0,0,0,.8);display:grid;place-items:center;
+  transition:height .35s ease,width .35s ease,border-radius .35s ease,transform .15s ease;
+}
+.nova-eye::before{
+  content:'';position:absolute;inset:0;border-radius:40%;
+  background:radial-gradient(circle, #5eead4, #22d3ee 55%, rgba(34,211,238,0) 85%);
+  box-shadow:0 0 12px #22d3ee,0 0 24px rgba(34,211,238,.6);
+  opacity:.95;
+}
+.nova-eye-pupil{
+  position:relative;width:34%;height:60%;border-radius:50%;background:#ecfeff;
+  box-shadow:0 0 6px #fff;transition:transform .35s ease;
+}
+@keyframes nova-breathe{0%,100%{filter:brightness(1)}50%{filter:brightness(1.08)}}
+
+/* listening: eyes widen, brighten faster, pulsing ring */
+.nova-face-listening .nova-eye{height:15%;width:24%}
+.nova-face-listening .nova-face-sphere{animation:nova-breathe 1.6s ease-in-out infinite}
+.nova-face-pulse{
+  position:absolute;inset:-10%;border-radius:50%;border:2px solid rgba(34,211,238,.55);
+  animation:nova-pulse-ring 1.6s ease-out infinite;pointer-events:none;
+}
+@keyframes nova-pulse-ring{0%{transform:scale(.85);opacity:.9}100%{transform:scale(1.25);opacity:0}}
+
+/* thinking: eyes narrow, pupils scan side to side while NOVA generates a reply */
+.nova-face-thinking .nova-eye{height:6%;border-radius:30%}
+.nova-face-thinking .nova-eye-pupil{animation:nova-scan 1.3s ease-in-out infinite}
+@keyframes nova-scan{0%,100%{margin-left:-4px}50%{margin-left:4px}}
 
 /* ---------------- Home: 3-up panels ---------------- */
 .home-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
@@ -129,13 +180,12 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 
 .ai-response-panel{display:flex;flex-direction:column}
 .ai-response-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-.mini-orb{width:34px;height:34px;border-radius:50%;background:radial-gradient(circle at 35% 30%, #1e293b, #0b1220 70%);box-shadow:0 0 0 4px rgba(167,139,250,.18);flex:none}
 .ai-response-head b{font-size:13px;display:block}
 .ai-response-head span{font-size:10px;color:var(--muted)}
 
 .vision-view,.chat-view,.aitools-view,.devices-view{display:flex;flex-direction:column;gap:14px;height:100%}
 
-/* ---------------- Camera (unchanged behaviour, restyled) ---------------- */
+/* ---------------- Camera ---------------- */
 .camera-card{position:relative;overflow:hidden;border-radius:16px;background:var(--panel-bg);border:1px solid var(--panel-border);box-shadow:var(--shadow-sm)}
 .camera-empty{padding:22px 0;display:flex;flex-direction:column;gap:12px;align-items:center;justify-content:center;color:var(--muted)}
 .camera-empty button,.camera-card button{background:var(--brand-grad);color:#fff;padding:9px 18px;border-radius:999px;font-size:13px;font-weight:700;box-shadow:0 8px 18px rgba(129,140,248,.35)}
@@ -236,7 +286,7 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
   .content-body{padding:14px}
   .composer-dock{padding:10px 14px}
   .hero-card{flex-direction:column;text-align:center;padding:22px}
-  .hero-orb{width:100px;height:100px}
+  .hero-orb{width:100px!important;height:100px!important}
   .ring-row{flex-wrap:wrap}
 }
 
