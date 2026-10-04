@@ -36,11 +36,22 @@ button{cursor:pointer;border:0;background:transparent}
 .shell{height:100vh;height:100dvh;display:flex;overflow:hidden;color:var(--text);background:var(--page-bg)}
 .app{height:100vh;height:100dvh;display:flex;flex-direction:column;color:var(--text);background:var(--page-bg)}
 
-/* ---------------- Sidebar ---------------- */
+/* ---------------- Flexible Sidebar ---------------- */
 .sidebar{
   flex:none;width:208px;display:flex;flex-direction:column;gap:6px;padding:18px 14px;
   background:var(--panel-bg);border-right:1px solid var(--panel-border);
+  transition: width 0.3s cubic-bezier(0.2,0.9,0.3,1), transform 0.3s cubic-bezier(0.2,0.9,0.3,1), padding 0.3s ease;
+  z-index: 30; white-space: nowrap; overflow: hidden;
 }
+
+/* Desktop Collapsed State */
+.sidebar.collapsed { width: 68px; padding: 18px 8px; }
+.sidebar.collapsed .sidebar-brand { justify-content: center; padding: 4px; }
+.sidebar.collapsed .sidebar-brand b, .sidebar.collapsed .sidebar-brand small { opacity: 0; width: 0; display: none; }
+.sidebar.collapsed .nav-item span { display: none; }
+.sidebar.collapsed .nav-item { justify-content: center; padding: 12px 0; }
+.sidebar.collapsed .sidebar-status, .sidebar.collapsed .sidebar-user { display: none; }
+
 .sidebar-brand{display:flex;align-items:center;gap:10px;padding:4px 6px 20px}
 .sidebar-brand .logo{display:grid;place-items:center;width:34px;height:34px;border-radius:50%;background:var(--brand-grad);color:#fff;box-shadow:0 0 0 4px rgba(167,139,250,.14)}
 .sidebar-brand b{display:block;font-size:14px;font-weight:800}
@@ -59,9 +70,23 @@ button{cursor:pointer;border:0;background:transparent}
 .avatar-circle{width:28px;height:28px;border-radius:50%;background:var(--brand-grad);color:#fff;display:grid;place-items:center;flex:none}
 .avatar-circle.small{width:30px;height:30px}
 
+/* Mobile Overlay */
+.sidebar-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 25; backdrop-filter: blur(2px);
+  opacity: 0; pointer-events: none; transition: opacity 0.3s;
+}
+.sidebar-overlay.open { opacity: 1; pointer-events: auto; }
+@media(min-width: 721px) { .sidebar-overlay { display: none !important; } }
+
 /* ---------------- Top bar ---------------- */
 .content{flex:1;min-width:0;display:flex;flex-direction:column;height:100%}
-.content-top{flex:none;padding:14px 22px;display:flex;align-items:center;gap:16px;border-bottom:1px solid var(--panel-border);background:var(--panel-bg)}
+.content-top{flex:none;padding:14px 22px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--panel-border);background:var(--panel-bg)}
+.menu-btn {
+  display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px;
+  background: var(--page-bg); border: 1px solid var(--panel-border); color: var(--muted);
+  cursor: pointer; flex: none; transition: 0.2s; margin-right: 4px;
+}
+.menu-btn:hover { color: var(--brand-2); }
 .topbar-greeting{display:flex;flex-direction:column;flex:none;min-width:150px}
 .topbar-greeting b{font-size:16px;font-weight:800}
 .topbar-greeting span{font-size:11px;color:var(--muted);margin-top:2px}
@@ -96,8 +121,6 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
   perspective: 1200px;
   flex: none;
 }
-
-/* Organic Swirling Aura Rings */
 .nova-aura-ring {
   position: absolute;
   top: 50%; left: 50%;
@@ -130,8 +153,6 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
   0% { transform: translate(-50%, -50%) rotate(0deg); }
   100% { transform: translate(-50%, -50%) rotate(360deg); }
 }
-
-/* Dark Glass Sphere */
 .nova-exact-head {
   width: 100%;
   height: 100%;
@@ -148,8 +169,6 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
   z-index: 2;
   animation: exact-breathe 4s ease-in-out infinite;
 }
-
-/* Crisp Top-Left Reflection */
 .nova-exact-highlight {
   position: absolute;
   top: 6%; left: 8%;
@@ -159,8 +178,6 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
   transform: rotate(-25deg);
   pointer-events: none;
 }
-
-/* Parallax Eyes */
 .nova-exact-eyes {
   position: absolute;
   inset: 0;
@@ -168,7 +185,7 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
   align-items: center;
   justify-content: center;
   gap: 13%; 
-  transform: translateZ(28px); /* Forces eyes outward in 3D space */
+  transform: translateZ(28px);
 }
 .nova-exact-eye {
   width: 21%;
@@ -181,8 +198,6 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
     inset 0 0 6px #fff;
   transition: transform 0.15s ease-out, height 0.3s ease;
 }
-
-/* Interactive States */
 @keyframes exact-breathe { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.15); } }
 .nova-face-listening .nova-exact-eye { height: 13%; background: #4deeea; box-shadow: 0 0 20px #4deeea, 0 0 45px rgba(77, 238, 234, 0.9), inset 0 0 8px #fff; }
 .nova-face-listening .nova-exact-head { animation: exact-breathe 1.5s ease-in-out infinite; }
@@ -237,10 +252,8 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 .camera-bottom{position:absolute;bottom:0;left:0;right:0;padding:9px;text-align:center;background:linear-gradient(transparent,#000c);font-size:10px;color:#e2e8f0}
 
 .capabilities{display:none}
-
 .learn-row{display:flex;gap:7px}
 .learn-row input{flex:1;background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:10px;color:var(--text);padding:8px 10px;font-size:12px;outline:none}
-
 .attachments-row{display:flex;gap:6px;flex-wrap:wrap;padding:0 0 8px}
 .attachment-chip{display:flex;align-items:center;gap:4px;background:var(--page-bg);border:1px solid var(--panel-border);border-radius:999px;padding:4px 10px;font-size:11px;color:var(--brand-2)}
 .attachment-chip button{display:flex;color:var(--brand-1)}
@@ -310,17 +323,25 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
   .home-grid-3{grid-template-columns:1fr}
 }
 @media(max-width:720px){
-  .sidebar{position:fixed;inset:0 auto 0 0;z-index:30;width:68px;padding:14px 8px}
-  .sidebar-brand div,.nav-item span,.nav-item{font-size:0}
-  .sidebar-brand{justify-content:center;padding:4px}
-  .sidebar-brand b,.sidebar-brand small{display:none}
-  .nav-item{display:flex;justify-content:center;padding:12px 0;font-size:0}
-  .nav-item svg{flex:none}
-  .sidebar-status,.sidebar-user{display:none}
-  .content{margin-left:68px}
+  /* Mobile Slide-in Drawer */
+  .sidebar{
+    position:fixed;inset:0 auto 0 0;height:100%;
+    transform:translateX(-100%);
+    width:240px;padding:18px 14px; box-shadow: var(--shadow);
+  }
+  .sidebar.mobile-open { transform: translateX(0); }
+
+  /* Force elements visible on mobile regardless of collapsed state */
+  .sidebar.collapsed .sidebar-brand { justify-content: flex-start; padding: 4px 6px 20px; }
+  .sidebar.collapsed .sidebar-brand b, .sidebar.collapsed .sidebar-brand small { display: block; opacity: 1; width: auto; }
+  .sidebar.collapsed .nav-item span { display: inline; }
+  .sidebar.collapsed .nav-item { justify-content: flex-start; padding: 10px 12px; }
+  .sidebar.collapsed .sidebar-status, .sidebar.collapsed .sidebar-user { display: flex; }
+
+  .content{margin-left:0}
   .content-top{padding:12px 10px;flex-wrap:wrap;gap:8px}
   .topbar-greeting{min-width:0}
-  .topbar-search{order:3;flex:1 1 100%;max-width:none}
+  .topbar-search{order:4;flex:1 1 100%;max-width:none}
   .content-body{padding:14px}
   .composer-dock{padding:10px 14px}
   .hero-card{flex-direction:column;text-align:center;padding:22px}
@@ -334,20 +355,9 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 body {
   cursor: none !important;
 }
-
 #nova-finalboss-cursor {
-  position: fixed;
-  left: 0px;
-  top: 0px;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background-color: rgba(16, 185, 129, 0.85);
-  border: 2px solid rgba(255, 255, 255, 1);
-  box-shadow: 0 0 18px rgba(16, 185, 129, 0.95);
-  pointer-events: none;
-  z-index: 999999;
-  transform: translate3d(-100px, -100px, 0);
-  display: none;
-  will-change: transform, background-color;
+  position: fixed; left: 0px; top: 0px; width: 26px; height: 26px; border-radius: 50%;
+  background-color: rgba(16, 185, 129, 0.85); border: 2px solid rgba(255, 255, 255, 1);
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.95); pointer-events: none; z-index: 999999;
+  transform: translate3d(-100px, -100px, 0); display: none; will-change: transform, background-color;
 }
