@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bell, Bot, Copy, Eye, Hand, History, Home, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Search, Send, Settings, Smartphone, Sparkles, Sun, User, Wand2, X } from 'lucide-react';
+import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Search, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
 import type { MessageAttachment } from './services/hybridAI';
@@ -40,7 +40,30 @@ interface ChatSession { id: string; title: string; messages: Message[]; updatedA
 const WELCOME: Message = { id: 'welcome', role: 'model', text: 'Hello. I am NOVA Gesture AI.\n\nI can combine local sign recognition, custom gestures and an AI model. You can also teach me new hand signs below the camera.', timestamp: Date.now() };
 
 type View = 'home' | 'vision' | 'chat' | 'devices' | 'aitools';
+type AiMode = 'assistant' | 'thinking' | 'image' | 'coder';
 
+const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruction?: string }> = {
+  assistant: { label: 'Personal Assistant', blurb: 'General help, chat and device control — NOVA\'s default mode.' },
+  thinking: {
+    label: 'Deep Thinking',
+    blurb: 'Slower, more thorough reasoning for hard or multi-step questions.',
+    systemInstruction: 'Think step-by-step before answering: break the problem down, weigh alternatives or edge cases, then give one clear, well-reasoned final answer.'
+  },
+  image: { label: 'Image Generation', blurb: 'Describe a picture and NOVA will generate it (free, no API key).' },
+  coder: {
+    label: 'Coder X',
+    blurb: 'A focused coding assistant — complete, copy-paste-ready code with brief explanations.',
+    systemInstruction: 'You are Coder X, an expert programming assistant inside NOVA. The person you are helping is phone/tablet-only and pastes whole files into GitHub\'s mobile editor, so always give complete, copy-paste-ready code (not diffs or snippets) and explain changes briefly in plain language.'
+  }
+};
+
+function buildImageUrl(prompt: string): string {
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
+}
+
+// Small SVG ring used by the System Overview card. Real numbers only —
+// nothing here pretends to read your phone's actual CPU/RAM (a browser tab
+// can't see that), so each ring is wired to something NOVA genuinely knows.
 function Ring({ percent, color, label, value }: { percent: number; color: string; label: string; value: string }) {
   const r = 26; const c = 2 * Math.PI * r;
   const pct = Math.max(0, Math.min(100, percent));
@@ -92,6 +115,7 @@ export default function App() {
   const chatEnd = useRef<HTMLDivElement>(null);
 
   const [view, setView] = useState<View>('home');
+  const [aiMode, setAiMode] = useState<AiMode>('assistant');
   const [search, setSearch] = useState('');
   const [unread, setUnread] = useState(0);
   const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
@@ -136,10 +160,29 @@ export default function App() {
       return;
     }
 
-    const result = await generateLocalOrCloud(text, messages, settings, attachments);
+    if (aiMode === 'image' && text) {
+      setAttachments([]); setProvider('Image Generation • Pollinations (free)');
+      const url = buildImageUrl(text);
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here's your image for: "${text}"`, imageUrl: url, timestamp: Date.now() }]);
+      setTyping(false);
+      return;
+    }
+
+    const modeInfo = AI_MODE_INFO[aiMode];
+    const effectiveSettings = modeInfo.systemInstruction
+      ? { ...settings, systemInstruction: `${settings.systemInstruction}\n\n${modeInfo.systemInstruction}` }
+      : settings;
+
+    const result = await generateLocalOrCloud(text, messages, effectiveSettings, attachments);
     setAttachments([]);
     setProvider(result.provider); setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: result.text, timestamp: Date.now() }]); setTyping(false); speak(result.text);
-  }, [input, messages, settings, typing, speak, attachments]);
+  }, [input, messages, settings, typing, speak, attachments, aiMode]);
+
+  const switchAiMode = (mode: AiMode) => {
+    setAiMode(mode);
+    setView('chat');
+    setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Switched to ${AI_MODE_INFO[mode].label} mode. ${AI_MODE_INFO[mode].blurb}`, timestamp: Date.now() }]);
+  };
 
   const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -285,13 +328,13 @@ export default function App() {
 
         {view === 'chat' && <div className="chat-view">
           <div className="chat-head">
-            <div><b>Assistant</b><span>Sign language companion</span></div>
+            <div><b>Assistant</b><span>{AI_MODE_INFO[aiMode].label}{aiMode !== 'assistant' ? ' mode' : ' • Sign language companion'}</span></div>
             <div className="chat-head-actions"><button onClick={() => setHistoryOpen(true)}><History size={14}/> History</button><button onClick={startNewChat}><Plus size={14}/> New chat</button></div>
           </div>
           <div className="messages">
             {messages.map(m => <div key={m.id} className={`message ${m.role}`}>
               <div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div>
-              <div className="bubble"><div>{m.text}</div>{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div>
+              <div className="bubble"><div>{m.text}</div>{m.imageUrl && <img src={m.imageUrl} alt="Generated" className="chat-image"/>}{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div>
             </div>)}
             {typing && <div className="message model"><div className="avatar"><Bot size={15}/></div><div className="bubble dots">● ● ●</div></div>}
             <div ref={chatEnd}/>
@@ -300,27 +343,28 @@ export default function App() {
 
         {view === 'aitools' && <div className="aitools-view">
           <div className="panel">
-            <div className="section-title">Active AI provider</div>
-            <div className="bar-row"><span>Provider</span><b>{settings.aiProvider}</b></div>
-            <div className="bar-row"><span>Model</span><b>{settings.aiProvider === 'webllm' ? settings.webllmModel : settings.aiProvider === 'gemini' ? settings.geminiModel : settings.cloudFreeModel}</b></div>
-            <button className="secondary" onClick={() => setSettingsOpen(true)}><Settings size={14}/> Change in Settings</button>
+            <div className="section-title">Choose how NOVA should help</div>
+            <div className="quick-grid mode-grid">
+              <button className={aiMode === 'thinking' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('thinking')}>
+                <BrainCircuit size={20}/><b>Deep Thinking</b><span>Thorough, step-by-step reasoning</span>
+              </button>
+              <button className={aiMode === 'image' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('image')}>
+                <ImageIcon size={20}/><b>Image Generation</b><span>Describe it, NOVA draws it</span>
+              </button>
+              <button className={aiMode === 'coder' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('coder')}>
+                <Code2 size={20}/><b>Coder X</b><span>Complete, paste-ready code</span>
+              </button>
+              <button className={aiMode === 'assistant' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('assistant')}>
+                <UserCog size={20}/><b>Personal Assistant</b><span>General help &amp; device control</span>
+              </button>
+            </div>
           </div>
           <div className="panel">
-            <div className="section-title">ASL letters recognized</div>
-            <p className="panel-text">A B C D F I K L O S U V W X Y — hold a shape steady in front of the camera to type it. J and Z need motion across frames, so they aren't supported from a single camera view.</p>
-          </div>
-          <div className="panel">
-            <div className="section-title">Built-in gestures</div>
-            <div className="gesture-row"><div><b>SEND</b><small>Index + pinky up — sends the current message</small></div></div>
-            <div className="gesture-row"><div><b>CLEAR</b><small>Fist with thumb down — clears the input</small></div></div>
-            <div className="gesture-row"><div><b>THEME_SWITCH</b><small>Open palm — toggles light/dark</small></div></div>
-            <div className="gesture-row"><div><b>Wireless mouse</b><small>Only middle finger up on both hands, held briefly — toggles hands-free cursor mode</small></div></div>
-          </div>
-          <div className="panel">
-            <div className="section-title">Your custom gestures</div>
-            {settings.customGestures.length === 0 && <div className="history-empty">None yet — add some in Settings → Gesture Lab.</div>}
-            {settings.customGestures.map(g => <div className="gesture-row" key={g.id}><div><b>{g.name}</b><small>{g.description} → {g.action}</small></div></div>)}
-            <button className="secondary" onClick={() => setSettingsOpen(true)}><Plus size={14}/> Add a command</button>
+            <div className="section-title">Active mode</div>
+            <div className="bar-row"><span>Mode</span><b>{AI_MODE_INFO[aiMode].label}</b></div>
+            <p className="panel-text">{AI_MODE_INFO[aiMode].blurb}</p>
+            <div className="bar-row"><span>Chat provider</span><b>{settings.aiProvider}</b></div>
+            <button className="secondary" onClick={() => setSettingsOpen(true)}><Settings size={14}/> Change provider in Settings</button>
           </div>
         </div>}
 
