@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Search, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X } from 'lucide-react';
+import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
 import type { MessageAttachment } from './services/hybridAI';
@@ -38,6 +38,8 @@ function executeAndroidAgentCommand(rawText: string): string | null {
 }
 
 interface ChatSession { id: string; title: string; messages: Message[]; updatedAt: number; }
+interface AppNotification { id: string; text: string; time: number; }
+
 const WELCOME: Message = { id: 'welcome', role: 'model', text: 'Hello. I am NOVA Gesture AI.\n\nI can combine local sign recognition, custom gestures and an AI model. You can also teach me new hand signs below the camera.', timestamp: Date.now() };
 
 type View = 'home' | 'vision' | 'chat' | 'devices' | 'aitools';
@@ -84,11 +86,19 @@ export default function App() {
   const [history, setHistory] = useState<ChatSession[]>(() => {
     try { return JSON.parse(localStorage.getItem('nova-chat-history') || '[]'); } catch { return []; }
   });
-  const [historyOpen, setHistoryOpen] = useState(false);
   
-  // Sidebar Interaction States
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [notifsOpen, setNotifsOpen] = useState(false);
   const [desktopCollapsed, setDesktopCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadNotifs, setUnreadNotifs] = useState(0);
+
+  const addNotification = useCallback((text: string) => {
+    setNotifications(prev => [{ id: crypto.randomUUID(), text, time: Date.now() }, ...prev]);
+    setUnreadNotifs(prev => prev + 1);
+  }, []);
 
   const currentSessionId = useRef<string>(crypto.randomUUID());
 
@@ -103,7 +113,14 @@ export default function App() {
     saveHistory([entry, ...rest].slice(0, 50));
   }, [history]);
 
-  const startNewChat = () => { persistCurrentSession(messages); currentSessionId.current = crypto.randomUUID(); setMessages([WELCOME]); };
+  const startNewChat = () => { 
+    persistCurrentSession(messages); 
+    currentSessionId.current = crypto.randomUUID(); 
+    setMessages([WELCOME]); 
+    setNotifications([{ id: crypto.randomUUID(), text: 'New chat started. System logs reset.', time: Date.now() }]);
+    setUnreadNotifs(1);
+  };
+  
   const loadSession = (id: string) => { const s = history.find(h => h.id === id); if (!s) return; persistCurrentSession(messages); currentSessionId.current = s.id; setMessages(s.messages); setHistoryOpen(false); };
   const deleteSession = (id: string) => saveHistory(history.filter(h => h.id !== id));
   
@@ -120,13 +137,16 @@ export default function App() {
 
   const [view, setView] = useState<View>('home');
   const [aiMode, setAiMode] = useState<AiMode>('assistant');
-  const [search, setSearch] = useState('');
-  const [unread, setUnread] = useState(0);
   const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
 
   useEffect(() => { localStorage.setItem('nova-unified-settings', JSON.stringify(settings)); document.documentElement.dataset.theme = settings.theme; }, [settings]);
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, typing]);
   useEffect(() => { if (messages.some(m => m.id !== 'welcome')) persistCurrentSession(messages); }, [messages]);
+
+  // Log provider changes
+  useEffect(() => {
+    addNotification(`AI Provider active: ${settings.aiProvider}`);
+  }, [settings.aiProvider, addNotification]);
 
   useEffect(() => {
     const nav = navigator as any;
@@ -136,14 +156,6 @@ export default function App() {
     nav.getBattery().then((b: any) => { battery = b; update(); b.addEventListener('levelchange', update); });
     return () => battery?.removeEventListener?.('levelchange', update);
   }, []);
-
-  useEffect(() => { if (view === 'chat') setUnread(0); }, [view]);
-  const prevModelCount = useRef(1);
-  useEffect(() => {
-    const modelCount = messages.filter(m => m.role === 'model').length;
-    if (modelCount > prevModelCount.current && view !== 'chat') setUnread(u => u + (modelCount - prevModelCount.current));
-    prevModelCount.current = modelCount;
-  }, [messages, view]);
 
   const speak = useCallback((text: string) => {
     if (!settings.voiceEnabled || !('speechSynthesis' in window)) return;
@@ -185,7 +197,7 @@ export default function App() {
   const switchAiMode = (mode: AiMode) => {
     setAiMode(mode);
     setView('chat');
-    setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Switched to ${AI_MODE_INFO[mode].label} mode. ${AI_MODE_INFO[mode].blurb}`, timestamp: Date.now() }]);
+    addNotification(`Switched to ${AI_MODE_INFO[mode].label} mode.`);
   };
 
   const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -235,8 +247,6 @@ export default function App() {
     { id: 'aitools', label: 'AI Tools', icon: <Wand2 size={17}/> },
   ];
 
-  const runSearch = () => { if (!search.trim()) return; send(search); setSearch(''); };
-
   return <div className="shell">
     {/* Mobile Overlay */}
     <div className={`sidebar-overlay ${mobileOpen ? 'open' : ''}`} onClick={() => setMobileOpen(false)} />
@@ -277,13 +287,16 @@ export default function App() {
         }}>
           <Menu size={20}/>
         </button>
-        <div className="topbar-greeting"><b>{view === 'home' ? 'Good day, there! 👋' : navItems.find(n => n.id === view)?.label}</b><span>How can I assist you today?</span></div>
-        <div className="topbar-search">
-          <Search size={15}/>
-          <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && runSearch()} placeholder="Search or ask anything…"/>
+        <div className="topbar-greeting">
+          <b>{view === 'home' ? 'Good day, there! 👋' : navItems.find(n => n.id === view)?.label}</b>
+          <span>How can I assist you today?</span>
         </div>
+        
         <div className="content-top-actions">
-          <button title="Chat history" onClick={() => setHistoryOpen(true)} className="bell-btn"><Bell size={17}/>{unread > 0 && <span className="badge">{unread}</span>}</button>
+          <button title="Notifications" onClick={() => { setNotifsOpen(true); setUnreadNotifs(0); }} className="bell-btn">
+            <Bell size={17}/>
+            {unreadNotifs > 0 && <span className="badge">{unreadNotifs}</span>}
+          </button>
           <button title="Theme" onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}>{themeIcon}</button>
           <button title="Settings" className="avatar-circle small" onClick={() => setSettingsOpen(true)}><User size={15}/></button>
         </div>
@@ -398,6 +411,15 @@ export default function App() {
       </div>
 
       <div className="composer-dock">
+        {/* Active Mode Indicator */}
+        <div className="active-mode-indicator">
+          {aiMode === 'thinking' && <BrainCircuit size={12}/>}
+          {aiMode === 'image' && <ImageIcon size={12}/>}
+          {aiMode === 'coder' && <Code2 size={12}/>}
+          {aiMode === 'assistant' && <UserCog size={12}/>}
+          <span>{AI_MODE_INFO[aiMode].label}</span>
+        </div>
+
         {attachments.length > 0 && <div className="attachments-row">{attachments.map((a, i) => <span key={i} className="attachment-chip">{a.name}<button onClick={() => setAttachments(prev => prev.filter((_, idx) => idx !== i))}><X size={12}/></button></span>)}</div>}
         <input ref={fileInputRef} type="file" multiple hidden onChange={onFilePicked} />
         <div className="composer">
@@ -410,9 +432,20 @@ export default function App() {
     </div>
 
     {settingsOpen && <SettingsPanel settings={settings} onUpdate={setSettings} onClose={() => setSettingsOpen(false)}/>}
+    
+    {/* Notification Panel (Replaces Bell History) */}
+    {notifsOpen && <div className="modal-backdrop"><section className="history-panel">
+      <div className="settings-head"><div><b>Notifications</b><span>System alerts &amp; mode tracking</span></div><button onClick={() => setNotifsOpen(false)}><X/></button></div>
+      {notifications.length === 0 && <div className="history-empty">No new notifications.</div>}
+      {notifications.map(n => <div className="history-item" key={n.id}>
+        <div className="load" style={{cursor: 'default'}}>{n.text}<small>{new Date(n.time).toLocaleTimeString()}</small></div>
+      </div>)}
+    </section></div>}
+
+    {/* Chat History Modal (Moved from Bell to Chat View) */}
     {historyOpen && <div className="modal-backdrop"><section className="history-panel">
       <div className="settings-head"><div><b>Chat history</b><span>{history.length} saved conversation{history.length === 1 ? '' : 's'}</span></div><button onClick={() => setHistoryOpen(false)}><X/></button></div>
-      {history.length === 0 && <div className="history-empty">No saved conversations yet — they're saved automatically as you chat.</div>}
+      {history.length === 0 && <div className="history-empty">No saved conversations yet.</div>}
       {history.sort((a, b) => b.updatedAt - a.updatedAt).map(s => <div className="history-item" key={s.id}>
         <button className="load" onClick={() => { loadSession(s.id); setView('chat'); }}>{s.title}<small>{new Date(s.updatedAt).toLocaleString()}</small></button>
         <button className="del" onClick={() => deleteSession(s.id)}><X size={14}/></button>
