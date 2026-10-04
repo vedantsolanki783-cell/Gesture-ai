@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Copy, History, Mic, MicOff, Moon, Paperclip, Plus, Send, Settings, Sparkles, Sun, User, X } from 'lucide-react';
+import { Bell, Bot, Copy, Eye, Hand, History, Home, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Search, Send, Settings, Smartphone, Sparkles, Sun, User, Wand2, X } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
 import type { MessageAttachment } from './services/hybridAI';
@@ -39,6 +39,22 @@ function executeAndroidAgentCommand(rawText: string): string | null {
 interface ChatSession { id: string; title: string; messages: Message[]; updatedAt: number; }
 const WELCOME: Message = { id: 'welcome', role: 'model', text: 'Hello. I am NOVA Gesture AI.\n\nI can combine local sign recognition, custom gestures and an AI model. You can also teach me new hand signs below the camera.', timestamp: Date.now() };
 
+type View = 'home' | 'vision' | 'chat' | 'devices' | 'aitools';
+
+function Ring({ percent, color, label, value }: { percent: number; color: string; label: string; value: string }) {
+  const r = 26; const c = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, percent));
+  return <div className="ring-stat">
+    <svg width="64" height="64" viewBox="0 0 64 64">
+      <circle cx="32" cy="32" r={r} fill="none" stroke="var(--ring-track)" strokeWidth="6"/>
+      <circle cx="32" cy="32" r={r} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"
+        strokeDasharray={`${c}`} strokeDashoffset={`${c - (pct / 100) * c}`} transform="rotate(-90 32 32)"/>
+      <text x="32" y="36" textAnchor="middle" fontSize="13" fontWeight="700" fill="var(--text)">{value}</text>
+    </svg>
+    <span>{label}</span>
+  </div>;
+}
+
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => {
     try { return { ...defaults, ...JSON.parse(localStorage.getItem('nova-unified-settings') || '{}') }; } catch { return defaults; }
@@ -75,9 +91,31 @@ export default function App() {
   const recognitionRef = useRef<any>(null);
   const chatEnd = useRef<HTMLDivElement>(null);
 
+  const [view, setView] = useState<View>('home');
+  const [search, setSearch] = useState('');
+  const [unread, setUnread] = useState(0);
+  const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
+
   useEffect(() => { localStorage.setItem('nova-unified-settings', JSON.stringify(settings)); document.documentElement.dataset.theme = settings.theme; }, [settings]);
   useEffect(() => { chatEnd.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, typing]);
   useEffect(() => { if (messages.some(m => m.id !== 'welcome')) persistCurrentSession(messages); }, [messages]);
+
+  useEffect(() => {
+    const nav = navigator as any;
+    if (!nav.getBattery) return;
+    let battery: any;
+    const update = () => setBatteryLevel(Math.round(battery.level * 100));
+    nav.getBattery().then((b: any) => { battery = b; update(); b.addEventListener('levelchange', update); });
+    return () => battery?.removeEventListener?.('levelchange', update);
+  }, []);
+
+  useEffect(() => { if (view === 'chat') setUnread(0); }, [view]);
+  const prevModelCount = useRef(1);
+  useEffect(() => {
+    const modelCount = messages.filter(m => m.role === 'model').length;
+    if (modelCount > prevModelCount.current && view !== 'chat') setUnread(u => u + (modelCount - prevModelCount.current));
+    prevModelCount.current = modelCount;
+  }, [messages, view]);
 
   const speak = useCallback((text: string) => {
     if (!settings.voiceEnabled || !('speechSynthesis' in window)) return;
@@ -89,6 +127,7 @@ export default function App() {
     const label = text || (attachments.length ? `[${attachments.length} file(s) attached]` : '');
     const user: Message = { id: crypto.randomUUID(), role: 'user', text: label, timestamp: Date.now() };
     setMessages(prev => [...prev, user]); setInput(''); setTyping(true);
+    setView('chat');
 
     const androidReply = executeAndroidAgentCommand(text);
     if (androidReply) {
@@ -137,32 +176,189 @@ export default function App() {
 
   const onDetected = useCallback((result: VisionResult) => execute(result), [execute]);
   const vision = useVision(settings, settings.customGestures, onDetected);
-  const themeIcon = settings.theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>;
+  const themeIcon = settings.theme === 'dark' ? <Sun size={18}/> : <Moon size={18}/>;
+  const bridgeConnected = typeof window !== 'undefined' && !!(window as any).NovaAndroid;
+  const lastModelMessage = messages.filter(m => m.role === 'model').at(-1);
 
-  return <div className="app">
-    <header><div className="brand"><div className="logo"><Sparkles size={20}/></div><div><h1>NOVA GESTURE AI</h1><span><i/> {provider}</span></div></div><div className="header-actions"><button title="Chat history" onClick={() => setHistoryOpen(true)}><History/></button><button title="Voice" onClick={() => setSettings(s => ({ ...s, voiceEnabled: !s.voiceEnabled }))}>{settings.voiceEnabled ? <Mic/> : <MicOff/>}</button><button title="Theme" onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}>{themeIcon}</button><button title="Settings" onClick={() => setSettingsOpen(true)}><Settings/></button></div></header>
-    <main>
-      <aside>
-        <CameraView videoRef={vision.videoRef} enabled={settings.visionEnabled} status={vision.status} lastDetection={vision.lastDetection} onToggle={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} settings={settings}/>
-        {settings.visionEnabled && <div className="learn-row">
-          <input value={learnLabel} onChange={e => setLearnLabel(e.target.value.toUpperCase())} placeholder="Sign label, e.g. A" maxLength={16}/>
-          <button className="secondary" onClick={() => { if (learnLabel.trim()) { learnSign(learnLabel.trim()); setLearnLabel(''); } }}>Teach this sign</button>
+  const navItems: { id: View; label: string; icon: React.ReactNode }[] = [
+    { id: 'home', label: 'Home', icon: <Home size={17}/> },
+    { id: 'vision', label: 'Vision', icon: <Eye size={17}/> },
+    { id: 'chat', label: 'Chat', icon: <MessageSquare size={17}/> },
+    { id: 'devices', label: 'Devices', icon: <Smartphone size={17}/> },
+    { id: 'aitools', label: 'AI Tools', icon: <Wand2 size={17}/> },
+  ];
+
+  const runSearch = () => { if (!search.trim()) return; send(search); setSearch(''); };
+
+  return <div className="shell">
+    <nav className="sidebar">
+      <div className="sidebar-brand">
+        <div className="logo"><Bot size={18}/></div>
+        <div><b>NOVA AI</b><small>Think. Assist. Achieve.</small></div>
+      </div>
+      <div className="sidebar-nav">
+        {navItems.map(item => (
+          <button key={item.id} className={view === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setView(item.id)}>
+            {item.icon}{item.label}
+          </button>
+        ))}
+        <button className="nav-item" onClick={() => setSettingsOpen(true)}><Settings size={17}/>Settings</button>
+      </div>
+      <div className="sidebar-status">
+        <div className="status-head"><i className={vision.status === 'local' || vision.status === 'cloud' ? 'dot on' : 'dot'}/> NOVA Status</div>
+        <span>{vision.status === 'local' || vision.status === 'cloud' ? 'Online' : 'Idle'}</span>
+        <svg className="sparkline" viewBox="0 0 120 32" preserveAspectRatio="none">
+          <polyline points="0,24 12,18 24,22 36,10 48,16 60,6 72,14 84,9 96,18 108,8 120,14" fill="none" stroke="var(--brand-2)" strokeWidth="2"/>
+        </svg>
+      </div>
+      <button className="sidebar-user" onClick={() => setSettingsOpen(true)}>
+        <div className="avatar-circle"><User size={15}/></div>
+        <span>NOVA User</span>
+      </button>
+    </nav>
+
+    <div className="content">
+      <div className="content-top">
+        <div className="topbar-greeting"><b>{view === 'home' ? 'Good day, there! 👋' : navItems.find(n => n.id === view)?.label}</b><span>How can I assist you today?</span></div>
+        <div className="topbar-search">
+          <Search size={15}/>
+          <input value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => e.key === 'Enter' && runSearch()} placeholder="Search or ask anything…"/>
+        </div>
+        <div className="content-top-actions">
+          <button title="Chat history" onClick={() => setHistoryOpen(true)} className="bell-btn"><Bell size={17}/>{unread > 0 && <span className="badge">{unread}</span>}</button>
+          <button title="Theme" onClick={() => setSettings(s => ({ ...s, theme: s.theme === 'dark' ? 'light' : 'dark' }))}>{themeIcon}</button>
+          <button title="Settings" className="avatar-circle small" onClick={() => setSettingsOpen(true)}><User size={15}/></button>
+        </div>
+      </div>
+
+      <div className="content-body">
+        {view === 'home' && <div className="home-view">
+          <div className="hero-card">
+            <div className="hero-text">
+              <h1>NOVA AI</h1>
+              <b>Your Intelligent Assistant</b>
+              <p>Voice. Vision. Automation. All in one.</p>
+              <button className="primary hero-cta" onClick={toggleMic}>{listening ? 'Listening…' : 'Start Interaction'} <Mic size={15}/></button>
+            </div>
+            <div className="hero-orb"><div className="orb-face"><span/><span/></div></div>
+          </div>
+
+          <div className="home-grid-3">
+            <div className="panel">
+              <div className="section-title">Quick access</div>
+              <div className="quick-grid">
+                <button className="quick-card" onClick={() => setView('vision')}><Eye size={20}/><b>Vision Mode</b></button>
+                <button className="quick-card" onClick={toggleMic}><Mic size={20}/><b>Voice Chat</b></button>
+                <button className="quick-card" onClick={() => setView('devices')}><Smartphone size={20}/><b>Device Control</b></button>
+                <button className="quick-card" onClick={() => setView('aitools')}><Wand2 size={20}/><b>AI Tools</b></button>
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="section-title">System overview</div>
+              <div className="ring-row">
+                <Ring percent={settings.confidenceThreshold * 100} color="#60a5fa" label="Vision confidence" value={`${Math.round(settings.confidenceThreshold * 100)}%`}/>
+                <Ring percent={settings.voiceEnabled ? 100 : 0} color="#34d399" label="Voice replies" value={settings.voiceEnabled ? 'On' : 'Off'}/>
+                <Ring percent={batteryLevel ?? 0} color="#f472b6" label="Battery" value={batteryLevel !== null ? `${batteryLevel}%` : '—'}/>
+              </div>
+              <div className="bar-row">
+                <span>Saved chats</span><b>{history.length} / 50</b>
+              </div>
+              <div className="bar-track"><div className="bar-fill" style={{ width: `${Math.min(100, (history.length / 50) * 100)}%` }}/></div>
+            </div>
+
+            <div className="panel ai-response-panel">
+              <div className="section-title">AI response</div>
+              <div className="ai-response-head"><div className="mini-orb"/><div><b>Hello! 👋</b><span>{provider}</span></div></div>
+              <p className="panel-text">{lastModelMessage ? lastModelMessage.text.slice(0, 140) : "I'm NOVA, your AI assistant. Ask me anything, or show me a sign."}</p>
+            </div>
+          </div>
         </div>}
-      </aside>
-      <section className="chat"><div className="chat-head"><div><b>Assistant</b><span>Sign language companion</span></div><div className="chat-head-actions"><button onClick={() => setHistoryOpen(true)}><History size={14}/> History</button><button onClick={startNewChat}><Plus size={14}/> New chat</button></div></div><div className="messages">{messages.map(m => <div key={m.id} className={`message ${m.role}`}><div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div><div className="bubble"><div>{m.text}</div>{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div></div>)}{typing && <div className="message model"><div className="avatar"><Bot size={15}/></div><div className="bubble dots">● ● ●</div></div>}<div ref={chatEnd}/></div>
+
+        {view === 'vision' && <div className="vision-view">
+          <CameraView videoRef={vision.videoRef} enabled={settings.visionEnabled} status={vision.status} lastDetection={vision.lastDetection} onToggle={() => setSettings(s => ({ ...s, visionEnabled: !s.visionEnabled }))} settings={settings}/>
+          {settings.visionEnabled && <div className="learn-row">
+            <input value={learnLabel} onChange={e => setLearnLabel(e.target.value.toUpperCase())} placeholder="Sign label, e.g. A" maxLength={16}/>
+            <button className="secondary" onClick={() => { if (learnLabel.trim()) { learnSign(learnLabel.trim()); setLearnLabel(''); } }}>Teach this sign</button>
+          </div>}
+        </div>}
+
+        {view === 'chat' && <div className="chat-view">
+          <div className="chat-head">
+            <div><b>Assistant</b><span>Sign language companion</span></div>
+            <div className="chat-head-actions"><button onClick={() => setHistoryOpen(true)}><History size={14}/> History</button><button onClick={startNewChat}><Plus size={14}/> New chat</button></div>
+          </div>
+          <div className="messages">
+            {messages.map(m => <div key={m.id} className={`message ${m.role}`}>
+              <div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div>
+              <div className="bubble"><div>{m.text}</div>{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div>
+            </div>)}
+            {typing && <div className="message model"><div className="avatar"><Bot size={15}/></div><div className="bubble dots">● ● ●</div></div>}
+            <div ref={chatEnd}/>
+          </div>
+        </div>}
+
+        {view === 'aitools' && <div className="aitools-view">
+          <div className="panel">
+            <div className="section-title">Active AI provider</div>
+            <div className="bar-row"><span>Provider</span><b>{settings.aiProvider}</b></div>
+            <div className="bar-row"><span>Model</span><b>{settings.aiProvider === 'webllm' ? settings.webllmModel : settings.aiProvider === 'gemini' ? settings.geminiModel : settings.cloudFreeModel}</b></div>
+            <button className="secondary" onClick={() => setSettingsOpen(true)}><Settings size={14}/> Change in Settings</button>
+          </div>
+          <div className="panel">
+            <div className="section-title">ASL letters recognized</div>
+            <p className="panel-text">A B C D F I K L O S U V W X Y — hold a shape steady in front of the camera to type it. J and Z need motion across frames, so they aren't supported from a single camera view.</p>
+          </div>
+          <div className="panel">
+            <div className="section-title">Built-in gestures</div>
+            <div className="gesture-row"><div><b>SEND</b><small>Index + pinky up — sends the current message</small></div></div>
+            <div className="gesture-row"><div><b>CLEAR</b><small>Fist with thumb down — clears the input</small></div></div>
+            <div className="gesture-row"><div><b>THEME_SWITCH</b><small>Open palm — toggles light/dark</small></div></div>
+            <div className="gesture-row"><div><b>Wireless mouse</b><small>Only middle finger up on both hands, held briefly — toggles hands-free cursor mode</small></div></div>
+          </div>
+          <div className="panel">
+            <div className="section-title">Your custom gestures</div>
+            {settings.customGestures.length === 0 && <div className="history-empty">None yet — add some in Settings → Gesture Lab.</div>}
+            {settings.customGestures.map(g => <div className="gesture-row" key={g.id}><div><b>{g.name}</b><small>{g.description} → {g.action}</small></div></div>)}
+            <button className="secondary" onClick={() => setSettingsOpen(true)}><Plus size={14}/> Add a command</button>
+          </div>
+        </div>}
+
+        {view === 'devices' && <div className="devices-view">
+          <div className="panel">
+            <div className="section-title">Device bridge</div>
+            <p className="panel-text">{bridgeConnected ? 'Connected — running inside the NOVA Android app. These buttons control your device directly.' : 'Not connected — you are in a normal browser tab. These buttons only work inside the packaged NOVA Android app.'}</p>
+            <div className="quick-grid">
+              <button className="quick-card" onClick={() => send('enable overlay')}><Sparkles size={20}/><b>Overlay bubble</b></button>
+              <button className="quick-card" onClick={() => send('open accessibility')}><Settings size={20}/><b>Accessibility</b></button>
+              <button className="quick-card" onClick={() => send('go home')}><Home size={20}/><b>Go home</b></button>
+              <button className="quick-card" onClick={() => send('go back')}><Hand size={20}/><b>Go back</b></button>
+            </div>
+          </div>
+        </div>}
+      </div>
+
+      <div className="composer-dock">
         {attachments.length > 0 && <div className="attachments-row">{attachments.map((a, i) => <span key={i} className="attachment-chip">{a.name}<button onClick={() => setAttachments(prev => prev.filter((_, idx) => idx !== i))}><X size={12}/></button></span>)}</div>}
         <input ref={fileInputRef} type="file" multiple hidden onChange={onFilePicked} />
-        <div className="composer"><button className={listening ? 'active mic' : 'mic'} onClick={toggleMic}>{listening ? <MicOff/> : <Mic/>}</button><button className="mic" title="Attach file" onClick={() => fileInputRef.current?.click()}><Paperclip/></button><input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} placeholder="Type, speak, or use a sign…"/><button className="send" onClick={() => send()} disabled={(!input.trim() && attachments.length === 0) || typing}><Send/></button></div></section>
-    </main>
+        <div className="composer">
+          <button className={listening ? 'active mic' : 'mic'} onClick={toggleMic}>{listening ? <MicOff/> : <Mic/>}</button>
+          <button className="mic" title="Attach file" onClick={() => fileInputRef.current?.click()}><Paperclip/></button>
+          <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} placeholder="Ask me anything…"/>
+          <button className="send" onClick={() => send()} disabled={(!input.trim() && attachments.length === 0) || typing}><Send/></button>
+        </div>
+      </div>
+    </div>
+
     {settingsOpen && <SettingsPanel settings={settings} onUpdate={setSettings} onClose={() => setSettingsOpen(false)}/>}
     {historyOpen && <div className="modal-backdrop"><section className="history-panel">
       <div className="settings-head"><div><b>Chat history</b><span>{history.length} saved conversation{history.length === 1 ? '' : 's'}</span></div><button onClick={() => setHistoryOpen(false)}><X/></button></div>
       {history.length === 0 && <div className="history-empty">No saved conversations yet — they're saved automatically as you chat.</div>}
       {history.sort((a, b) => b.updatedAt - a.updatedAt).map(s => <div className="history-item" key={s.id}>
-        <button className="load" onClick={() => loadSession(s.id)}>{s.title}<small>{new Date(s.updatedAt).toLocaleString()}</small></button>
+        <button className="load" onClick={() => { loadSession(s.id); setView('chat'); }}>{s.title}<small>{new Date(s.updatedAt).toLocaleString()}</small></button>
         <button className="del" onClick={() => deleteSession(s.id)}><X size={14}/></button>
       </div>)}
-      <div className="settings-foot"><button className="primary" onClick={startNewChat}><Plus size={16}/> New chat</button></div>
+      <div className="settings-foot"><button className="primary" onClick={() => { startNewChat(); setView('chat'); }}><Plus size={16}/> New chat</button></div>
     </section></div>}
   </div>;
 }
