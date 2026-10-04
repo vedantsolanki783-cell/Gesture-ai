@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Search, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X } from 'lucide-react';
+import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Search, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
 import type { MessageAttachment } from './services/hybridAI';
@@ -62,9 +62,6 @@ function buildImageUrl(prompt: string): string {
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
 }
 
-// Small SVG ring used by the System Overview card. Real numbers only —
-// nothing here pretends to read your phone's actual CPU/RAM (a browser tab
-// can't see that), so each ring is wired to something NOVA genuinely knows.
 function Ring({ percent, color, label, value }: { percent: number; color: string; label: string; value: string }) {
   const r = 26; const c = 2 * Math.PI * r;
   const pct = Math.max(0, Math.min(100, percent));
@@ -88,6 +85,11 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('nova-chat-history') || '[]'); } catch { return []; }
   });
   const [historyOpen, setHistoryOpen] = useState(false);
+  
+  // Sidebar Interaction States
+  const [desktopCollapsed, setDesktopCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
   const currentSessionId = useRef<string>(crypto.randomUUID());
 
   const saveHistory = (list: ChatSession[]) => { setHistory(list); localStorage.setItem('nova-chat-history', JSON.stringify(list)); };
@@ -104,6 +106,7 @@ export default function App() {
   const startNewChat = () => { persistCurrentSession(messages); currentSessionId.current = crypto.randomUUID(); setMessages([WELCOME]); };
   const loadSession = (id: string) => { const s = history.find(h => h.id === id); if (!s) return; persistCurrentSession(messages); currentSessionId.current = s.id; setMessages(s.messages); setHistoryOpen(false); };
   const deleteSession = (id: string) => saveHistory(history.filter(h => h.id !== id));
+  
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [learnLabel, setLearnLabel] = useState('');
@@ -235,27 +238,32 @@ export default function App() {
   const runSearch = () => { if (!search.trim()) return; send(search); setSearch(''); };
 
   return <div className="shell">
-    <nav className="sidebar">
+    {/* Mobile Overlay */}
+    <div className={`sidebar-overlay ${mobileOpen ? 'open' : ''}`} onClick={() => setMobileOpen(false)} />
+    
+    <nav className={`sidebar ${desktopCollapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
       <div className="sidebar-brand">
         <div className="logo"><Bot size={18}/></div>
         <div><b>NOVA AI</b><small>Think. Assist. Achieve.</small></div>
       </div>
       <div className="sidebar-nav">
         {navItems.map(item => (
-          <button key={item.id} className={view === item.id ? 'nav-item active' : 'nav-item'} onClick={() => setView(item.id)}>
-            {item.icon}{item.label}
+          <button key={item.id} className={view === item.id ? 'nav-item active' : 'nav-item'} onClick={() => { setView(item.id); setMobileOpen(false); }}>
+            {item.icon}<span>{item.label}</span>
           </button>
         ))}
-        <button className="nav-item" onClick={() => setSettingsOpen(true)}><Settings size={17}/>Settings</button>
+        <button className="nav-item" onClick={() => { setSettingsOpen(true); setMobileOpen(false); }}>
+          <Settings size={17}/><span>Settings</span>
+        </button>
       </div>
       <div className="sidebar-status">
-        <div className="status-head"><i className={vision.status === 'local' || vision.status === 'cloud' ? 'dot on' : 'dot'}/> NOVA Status</div>
+        <div className="status-head"><i className={vision.status === 'local' || vision.status === 'cloud' ? 'dot on' : 'dot'}/> <span>NOVA Status</span></div>
         <span>{vision.status === 'local' || vision.status === 'cloud' ? 'Online' : 'Idle'}</span>
         <svg className="sparkline" viewBox="0 0 120 32" preserveAspectRatio="none">
           <polyline points="0,24 12,18 24,22 36,10 48,16 60,6 72,14 84,9 96,18 108,8 120,14" fill="none" stroke="var(--brand-2)" strokeWidth="2"/>
         </svg>
       </div>
-      <button className="sidebar-user" onClick={() => setSettingsOpen(true)}>
+      <button className="sidebar-user" onClick={() => { setSettingsOpen(true); setMobileOpen(false); }}>
         <div className="avatar-circle"><User size={15}/></div>
         <span>NOVA User</span>
       </button>
@@ -263,6 +271,12 @@ export default function App() {
 
     <div className="content">
       <div className="content-top">
+        <button className="menu-btn" onClick={() => {
+          if (window.innerWidth <= 720) setMobileOpen(true);
+          else setDesktopCollapsed(!desktopCollapsed);
+        }}>
+          <Menu size={20}/>
+        </button>
         <div className="topbar-greeting"><b>{view === 'home' ? 'Good day, there! 👋' : navItems.find(n => n.id === view)?.label}</b><span>How can I assist you today?</span></div>
         <div className="topbar-search">
           <Search size={15}/>
