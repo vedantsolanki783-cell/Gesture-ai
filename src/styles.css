@@ -34,7 +34,7 @@ button,input,textarea,select{font:inherit}
 button{cursor:pointer;border:0;background:transparent}
 
 .shell{height:100vh;height:100dvh;display:flex;overflow:hidden;color:var(--text);background:var(--page-bg)}
-.app{height:100vh;height:100dvh;display:flex;flex-direction:column;color:var(--text);background:var(--page-bg)} /* legacy, unused but kept */
+.app{height:100vh;height:100dvh;display:flex;flex-direction:column;color:var(--text);background:var(--page-bg)}
 
 /* ---------------- Sidebar ---------------- */
 .sidebar{
@@ -72,15 +72,6 @@ button{cursor:pointer;border:0;background:transparent}
 .content-top-actions button:hover{color:var(--brand-2)}
 .bell-btn{position:relative}
 .badge{position:absolute;top:-4px;right:-4px;background:#f43f5e;color:#fff;font-size:9px;font-weight:800;border-radius:999px;padding:1px 5px;min-width:16px;text-align:center}
-/* legacy header selectors kept so nothing breaks if ever rendered */
-header{padding:14px 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--panel-border);flex:none}
-.brand{display:flex;align-items:center;gap:10px}
-.logo{display:grid;place-items:center}
-.brand h1{font-size:18px;font-weight:800;margin:0}
-.brand span{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:11px;margin-top:3px}
-.brand i{width:6px;height:6px;border-radius:50%;background:var(--brand-1);display:inline-block}
-.header-actions{display:flex;gap:6px}
-.header-actions button{width:34px;height:34px;border-radius:10px;background:var(--page-bg);color:var(--brand-2);display:grid;place-items:center;border:1px solid var(--panel-border)}
 
 .content-body{flex:1;min-height:0;overflow-y:auto;padding:20px 22px}
 main{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px;width:100%}
@@ -97,59 +88,106 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 .hero-text p{margin:6px 0 16px;color:var(--muted);font-size:13px;max-width:280px}
 .hero-cta{background:var(--brand-grad);color:#fff;box-shadow:0 8px 20px rgba(129,140,248,.4)}
 
-/* ---------------- NOVA 3D face (replaces the old flat orb) ---------------- */
-.nova-face{flex:none;perspective:900px}
-.nova-face-sphere{
-  width:100%;height:100%;border-radius:50%;position:relative;transform-style:preserve-3d;
-  transform:rotateX(var(--nf-tiltx,0deg)) rotateY(var(--nf-tilty,0deg));
-  transition:transform .5s cubic-bezier(.22,.9,.32,1);
-  background:
-    radial-gradient(circle at 32% 26%, rgba(255,255,255,.55), rgba(255,255,255,0) 22%),
-    radial-gradient(circle at 38% 32%, #27324a, #0a0f1c 68%);
-  box-shadow:
-    inset 0 -14px 24px rgba(0,0,0,.55),
-    inset 0 10px 18px rgba(255,255,255,.08),
-    0 0 0 6px rgba(255,255,255,.22),
-    0 8px 25px rgba(0,0,0,0.5);
-  animation:nova-breathe 4.5s ease-in-out infinite;
+/* ---------------- Exact 3D Face Matches Reference Image ---------------- */
+.nova-exact-wrapper {
+  position: relative;
+  display: grid;
+  place-items: center;
+  perspective: 1200px;
+  flex: none;
 }
-.nova-face-shine{
-  position:absolute;top:10%;left:16%;width:38%;height:28%;border-radius:50%;
-  background:radial-gradient(circle, rgba(255,255,255,.65), rgba(255,255,255,0) 70%);
-  filter:blur(1px);pointer-events:none;
-}
-.nova-face-rim{position:absolute;inset:0;border-radius:50%;box-shadow:inset 0 0 18px rgba(34,211,238,.18);pointer-events:none}
-.nova-face-eyes{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:14%}
-.nova-eye{
-  position:relative;width:22%;height:11%;border-radius:40%;background:#031014;
-  box-shadow:inset 0 0 4px rgba(0,0,0,.8);display:grid;place-items:center;
-  transition:height .35s ease,width .35s ease,border-radius .35s ease,transform .15s ease;
-}
-.nova-eye::before{
-  content:'';position:absolute;inset:0;border-radius:40%;
-  background:radial-gradient(circle, #5eead4, #22d3ee 55%, rgba(34,211,238,0) 85%);
-  box-shadow:0 0 12px #22d3ee,0 0 24px rgba(34,211,238,.6);
-  opacity:.95;
-}
-.nova-eye-pupil{
-  position:relative;width:34%;height:60%;border-radius:50%;background:#ecfeff;
-  box-shadow:0 0 6px #fff;transition:transform .35s ease;
-}
-@keyframes nova-breathe{0%,100%{filter:brightness(1)}50%{filter:brightness(1.08)}}
 
-/* listening: eyes widen, brighten faster, pulsing ring */
-.nova-face-listening .nova-eye{height:15%;width:24%}
-.nova-face-listening .nova-face-sphere{animation:nova-breathe 1.6s ease-in-out infinite}
-.nova-face-pulse{
-  position:absolute;inset:-10%;border-radius:50%;border:2px solid rgba(34,211,238,.55);
-  animation:nova-pulse-ring 1.6s ease-out infinite;pointer-events:none;
+/* Organic Swirling Aura Rings */
+.nova-aura-ring {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  mix-blend-mode: screen;
 }
-@keyframes nova-pulse-ring{0%{transform:scale(.85);opacity:.9}100%{transform:scale(1.25);opacity:0}}
+.ring-1 {
+  width: 155%; height: 155%;
+  border-radius: 40% 60% 60% 40% / 50% 50% 40% 60%;
+  border: 2px solid rgba(56, 189, 248, 0.8);
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.4), inset 0 0 20px rgba(56, 189, 248, 0.4);
+  animation: exact-spin-morph 9s linear infinite;
+}
+.ring-2 {
+  width: 175%; height: 165%;
+  border-radius: 50% 40% 60% 40% / 40% 60% 50% 60%;
+  border: 1px solid rgba(192, 132, 252, 0.6);
+  box-shadow: 0 0 15px rgba(192, 132, 252, 0.3);
+  animation: exact-spin-morph 14s linear infinite reverse;
+}
+.ring-3 {
+  width: 140%; height: 180%;
+  border-radius: 60% 40% 40% 60% / 60% 40% 60% 40%;
+  border: 1.5px solid rgba(236, 72, 153, 0.5);
+  box-shadow: 0 0 25px rgba(236, 72, 153, 0.2);
+  animation: exact-spin-morph 11s linear infinite;
+}
+@keyframes exact-spin-morph {
+  0% { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
 
-/* thinking: eyes narrow, pupils scan side to side while NOVA generates a reply */
-.nova-face-thinking .nova-eye{height:6%;border-radius:30%}
-.nova-face-thinking .nova-eye-pupil{animation:nova-scan 1.3s ease-in-out infinite}
-@keyframes nova-scan{0%,100%{margin-left:-4px}50%{margin-left:4px}}
+/* Dark Glass Sphere */
+.nova-exact-head {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  position: relative;
+  background: radial-gradient(circle at 45% 45%, #080d24 0%, #030612 60%, #000000 100%);
+  box-shadow: 
+    inset 18px 18px 30px rgba(56, 189, 248, 0.2), 
+    inset -15px -15px 35px rgba(192, 132, 252, 0.2), 
+    0 20px 40px rgba(0,0,0,0.5);
+  transform-style: preserve-3d;
+  transform: rotateX(var(--nf-tiltx, 0deg)) rotateY(var(--nf-tilty, 0deg));
+  transition: transform 0.4s cubic-bezier(0.2, 0.9, 0.3, 1);
+  z-index: 2;
+  animation: exact-breathe 4s ease-in-out infinite;
+}
+
+/* Crisp Top-Left Reflection */
+.nova-exact-highlight {
+  position: absolute;
+  top: 6%; left: 8%;
+  width: 45%; height: 45%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at top left, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0) 65%);
+  transform: rotate(-25deg);
+  pointer-events: none;
+}
+
+/* Parallax Eyes */
+.nova-exact-eyes {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 13%; 
+  transform: translateZ(28px); /* Forces eyes outward in 3D space */
+}
+.nova-exact-eye {
+  width: 21%;
+  height: 9%;
+  border-radius: 999px;
+  background: #38bdf8;
+  box-shadow: 
+    0 0 15px #38bdf8,
+    0 0 35px rgba(56, 189, 248, 0.8),
+    inset 0 0 6px #fff;
+  transition: transform 0.15s ease-out, height 0.3s ease;
+}
+
+/* Interactive States */
+@keyframes exact-breathe { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.15); } }
+.nova-face-listening .nova-exact-eye { height: 13%; background: #4deeea; box-shadow: 0 0 20px #4deeea, 0 0 45px rgba(77, 238, 234, 0.9), inset 0 0 8px #fff; }
+.nova-face-listening .nova-exact-head { animation: exact-breathe 1.5s ease-in-out infinite; }
+.nova-face-thinking .nova-exact-eye { height: 4.5%; animation: exact-squint 1.2s infinite alternate; }
+@keyframes exact-squint { to { opacity: 0.6; box-shadow: 0 0 8px #38bdf8; } }
 
 /* ---------------- Home: 3-up panels ---------------- */
 .home-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
