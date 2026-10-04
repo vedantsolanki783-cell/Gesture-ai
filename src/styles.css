@@ -87,11 +87,10 @@ button{cursor:pointer;border:0;background:transparent}
   cursor: pointer; flex: none; transition: 0.2s; margin-right: 4px;
 }
 .menu-btn:hover { color: var(--brand-2); }
-.topbar-greeting{display:flex;flex-direction:column;flex:none;min-width:150px}
+.topbar-greeting{display:flex;flex-direction:column;flex:1;min-width:150px}
 .topbar-greeting b{font-size:16px;font-weight:800}
 .topbar-greeting span{font-size:11px;color:var(--muted);margin-top:2px}
-.topbar-search{flex:1;max-width:360px;display:flex;align-items:center;gap:8px;background:var(--page-bg);border:1px solid var(--panel-border);border-radius:999px;padding:8px 14px;color:var(--muted)}
-.topbar-search input{flex:1;background:transparent;border:0;outline:none;color:var(--text);font-size:13px}
+
 .content-top-actions{display:flex;align-items:center;gap:8px;margin-left:auto}
 .content-top-actions button{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:var(--muted);background:var(--page-bg);border:1px solid var(--panel-border)}
 .content-top-actions button:hover{color:var(--brand-2)}
@@ -280,6 +279,17 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 .dots{letter-spacing:3px;color:var(--brand-1)}
 
 .composer-dock{flex:none;padding:14px 22px;border-top:1px solid var(--panel-border);background:var(--panel-bg)}
+
+/* New Active Mode Indicator in Composer */
+.active-mode-indicator {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; margin-bottom: 8px;
+  background: rgba(96,165,250,.12); color: var(--brand-1);
+  border: 1px solid rgba(96,165,250,.3);
+  border-radius: 999px; font-size: 10px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+
 .composer{display:flex;gap:7px;align-items:center}
 .composer input{flex:1;min-width:0;background:var(--page-bg);border:1px solid var(--panel-border);border-radius:999px;color:var(--text);padding:11px 16px;outline:none;font-size:14px}
 .composer input:focus{border-color:var(--brand-2)}
@@ -323,15 +333,12 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
   .home-grid-3{grid-template-columns:1fr}
 }
 @media(max-width:720px){
-  /* Mobile Slide-in Drawer */
   .sidebar{
     position:fixed;inset:0 auto 0 0;height:100%;
     transform:translateX(-100%);
     width:240px;padding:18px 14px; box-shadow: var(--shadow);
   }
   .sidebar.mobile-open { transform: translateX(0); }
-
-  /* Force elements visible on mobile regardless of collapsed state */
   .sidebar.collapsed .sidebar-brand { justify-content: flex-start; padding: 4px 6px 20px; }
   .sidebar.collapsed .sidebar-brand b, .sidebar.collapsed .sidebar-brand small { display: block; opacity: 1; width: auto; }
   .sidebar.collapsed .nav-item span { display: inline; }
@@ -341,7 +348,7 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
   .content{margin-left:0}
   .content-top{padding:12px 10px;flex-wrap:wrap;gap:8px}
   .topbar-greeting{min-width:0}
-  .topbar-search{order:4;flex:1 1 100%;max-width:none}
+  
   .content-body{padding:14px}
   .composer-dock{padding:10px 14px}
   .hero-card{flex-direction:column;text-align:center;padding:22px}
