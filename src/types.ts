@@ -5,6 +5,7 @@ export interface Message {
   role: Role;
   text: string;
   timestamp: number;
+  imageUrl?: string;
 }
 
 export type CustomAction =
