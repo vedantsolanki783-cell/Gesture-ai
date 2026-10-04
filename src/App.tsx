@@ -5,6 +5,7 @@ import { parseUploadedFile } from './services/fileReader';
 import type { MessageAttachment } from './services/hybridAI';
 import { CameraView } from './components/CameraView';
 import { SettingsPanel } from './components/SettingsPanel';
+import { NovaFace } from './components/NovaFace';
 import { useVision } from './hooks/useVision';
 import { learnSign } from './vision/localVision';
 import type { AppSettings, Message, VisionResult } from './types';
@@ -283,7 +284,7 @@ export default function App() {
               <p>Voice. Vision. Automation. All in one.</p>
               <button className="primary hero-cta" onClick={toggleMic}>{listening ? 'Listening…' : 'Start Interaction'} <Mic size={15}/></button>
             </div>
-            <div className="hero-orb"><div className="orb-face"><span/><span/></div></div>
+            <NovaFace size={140} state={listening ? 'listening' : typing ? 'thinking' : 'idle'} className="hero-orb"/>
           </div>
 
           <div className="home-grid-3">
@@ -312,7 +313,7 @@ export default function App() {
 
             <div className="panel ai-response-panel">
               <div className="section-title">AI response</div>
-              <div className="ai-response-head"><div className="mini-orb"/><div><b>Hello! 👋</b><span>{provider}</span></div></div>
+              <div className="ai-response-head"><NovaFace size={34} state={typing ? 'thinking' : 'idle'} className="mini-orb"/><div><b>Hello! 👋</b><span>{provider}</span></div></div>
               <p className="panel-text">{lastModelMessage ? lastModelMessage.text.slice(0, 140) : "I'm NOVA, your AI assistant. Ask me anything, or show me a sign."}</p>
             </div>
           </div>
