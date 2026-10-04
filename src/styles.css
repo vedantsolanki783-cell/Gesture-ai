@@ -252,7 +252,7 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 
 .capabilities{display:none}
 .learn-row{display:flex;gap:7px}
-.learn-row input{flex:1;background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:10px;color:var(--text);padding:8px 10px;font-size:16px;outline:none}
+.learn-row input{flex:1;background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:10px;color:var(--text);padding:8px 10px;font-size:12px;outline:none}
 .attachments-row{display:flex;gap:6px;flex-wrap:wrap;padding:0 0 8px}
 .attachment-chip{display:flex;align-items:center;gap:4px;background:var(--page-bg);border:1px solid var(--panel-border);border-radius:999px;padding:4px 10px;font-size:11px;color:var(--brand-2)}
 .attachment-chip button{display:flex;color:var(--brand-1)}
@@ -267,14 +267,12 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 .chat-head-actions button{display:flex;gap:5px;align-items:center;color:var(--muted);font-size:11px;background:var(--page-bg);padding:6px 9px;border-radius:7px;border:1px solid var(--panel-border)}
 .chat-head-actions button:hover{color:var(--brand-2)}
 
-/* Fixed: Locked horizontal overflow to stop moving chat */
-.messages{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px 0;display:flex;flex-direction:column;gap:16px}
+.messages{flex:1;min-height:0;overflow-y:auto;padding:14px 0;display:flex;flex-direction:column;gap:16px}
 .message{display:flex;gap:9px;max-width:92%}
 .message.user{margin-left:auto;flex-direction:row-reverse;text-align:right}
 .avatar{width:22px;height:22px;flex:none;border-radius:6px;display:grid;place-items:center;background:var(--page-bg);color:var(--brand-1);margin-top:2px;border:1px solid var(--panel-border)}
 .user .avatar{background:var(--brand-grad);color:#fff;border:none}
-/* Fixed: word-break ensures long code or text drops to next line, rather than pushing screen */
-.bubble{position:relative;padding:0;border:0;background:transparent;color:var(--text);font-size:14px;line-height:1.55;word-break:break-word;overflow-wrap:anywhere;white-space:pre-wrap}
+.bubble{position:relative;padding:0;border:0;background:transparent;color:var(--text);font-size:14px;line-height:1.55;white-space:pre-wrap}
 .user .bubble{color:var(--brand-2)}
 .copy{position:static;margin-top:4px;background:transparent;color:var(--muted);padding:0;display:inline-flex}
 .copy:hover{color:var(--text)}
@@ -282,6 +280,7 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 
 .composer-dock{flex:none;padding:14px 22px;border-top:1px solid var(--panel-border);background:var(--panel-bg)}
 
+/* New Active Mode Indicator in Composer */
 .active-mode-indicator {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 10px; margin-bottom: 8px;
@@ -292,8 +291,7 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 }
 
 .composer{display:flex;gap:7px;align-items:center}
-/* Fixed: 16px font-size prevents iOS/Android automatic zoom-in when tapping input */
-.composer input{flex:1;min-width:0;background:var(--page-bg);border:1px solid var(--panel-border);border-radius:999px;color:var(--text);padding:11px 16px;outline:none;font-size:16px}
+.composer input{flex:1;min-width:0;background:var(--page-bg);border:1px solid var(--panel-border);border-radius:999px;color:var(--text);padding:11px 16px;outline:none;font-size:14px}
 .composer input:focus{border-color:var(--brand-2)}
 .composer button{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;flex:none}
 .mic{background:var(--page-bg);color:var(--muted);border:1px solid var(--panel-border)}
@@ -301,8 +299,7 @@ aside{flex:none;display:flex;flex-direction:column;gap:10px}
 .send{background:var(--brand-grad);color:#fff;box-shadow:0 6px 16px rgba(129,140,248,.4)}
 .send:disabled{opacity:.35;cursor:not-allowed;box-shadow:none}
 
-/* Fixed: Boosted z-index to 100 so it completely covers the sidebar (which is 30) */
-.modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.65);display:grid;place-items:center;padding:14px;z-index:100;backdrop-filter:blur(4px)}
+.modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);display:grid;place-items:center;padding:14px;z-index:20}
 .settings,.history-panel{width:min(560px,100%);max-height:90vh;overflow:auto;background:var(--panel-bg);border:1px solid var(--panel-border);border-radius:16px;padding:18px;box-shadow:var(--shadow)}
 .settings-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
 .settings-head div{display:flex;flex-direction:column}
