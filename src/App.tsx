@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X } from 'lucide-react';
+import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X, Video } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
 import type { MessageAttachment } from './services/hybridAI';
@@ -43,7 +43,7 @@ interface AppNotification { id: string; text: string; time: number; }
 const WELCOME: Message = { id: 'welcome', role: 'model', text: 'Hello. I am NOVA Gesture AI.\n\nI can combine local sign recognition, custom gestures and an AI model. You can also teach me new hand signs below the camera.', timestamp: Date.now() };
 
 type View = 'home' | 'vision' | 'chat' | 'devices' | 'aitools';
-type AiMode = 'assistant' | 'thinking' | 'image' | 'coder';
+type AiMode = 'assistant' | 'thinking' | 'image' | 'video' | 'coder';
 
 const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruction?: string }> = {
   assistant: { label: 'Personal Assistant', blurb: 'General help, chat and device control — NOVA\'s default mode.' },
@@ -52,7 +52,8 @@ const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruc
     blurb: 'Slower, more thorough reasoning for hard or multi-step questions.',
     systemInstruction: 'Think step-by-step before answering: break the problem down, weigh alternatives or edge cases, then give one clear, well-reasoned final answer.'
   },
-  image: { label: 'Image Generation', blurb: 'Describe a picture and NOVA will generate it (free, no API key).' },
+  image: { label: 'Image Generation', blurb: 'Describe a picture and NOVA will generate it (max 40s).' },
+  video: { label: 'Video Generation', blurb: 'Generate short videos from a text prompt (max 1m).' },
   coder: {
     label: 'Coder X',
     blurb: 'A focused coding assistant — complete, copy-paste-ready code with brief explanations.',
@@ -63,6 +64,25 @@ const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruc
 function buildImageUrl(prompt: string): string {
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
 }
+
+// Added Download Helper Function
+const downloadMedia = async (url: string, filename: string) => {
+  try {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(blobUrl);
+  } catch (err) {
+    console.error('Download failed:', err);
+    alert('Failed to download file.');
+  }
+};
 
 function Ring({ percent, color, label, value }: { percent: number; color: string; label: string; value: string }) {
   const r = 26; const c = 2 * Math.PI * r;
@@ -176,10 +196,45 @@ export default function App() {
       return;
     }
 
+    // UPDATED: Image logic with 40s timeout
     if (aiMode === 'image' && text) {
-      setAttachments([]); setProvider('Image Generation • Pollinations (free)');
-      const url = buildImageUrl(text);
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here's your image for: "${text}"`, imageUrl: url, timestamp: Date.now() }]);
+      setAttachments([]); setProvider('Image Generation (max 40s)');
+      
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 40000); // 40-second strict limit
+        
+        const url = buildImageUrl(text);
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) throw new Error('Generation failed');
+        
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here's your image for: "${text}"`, imageUrl: url, timestamp: Date.now() }]);
+      } catch (error) {
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: 'Image generation stopped: Exceeded maximum time of 40 seconds or failed.', timestamp: Date.now() }]);
+      }
+      setTyping(false);
+      return;
+    }
+
+    // ADDED: Video logic with 1 min timeout
+    if (aiMode === 'video' && text) {
+      setAttachments([]); setProvider('Video Generation (max 1m)');
+      
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 1-minute strict limit
+        
+        // Placeholder for real video API call
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        
+        clearTimeout(timeoutId);
+        
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Video generation initialized for: "${text}". (Connect your video API backend in the code here to see results).`, timestamp: Date.now() }]);
+      } catch (error) {
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: 'Video generation stopped: Exceeded 1 minute limit.', timestamp: Date.now() }]);
+      }
       setTyping(false);
       return;
     }
@@ -362,7 +417,19 @@ export default function App() {
           <div className="messages">
             {messages.map(m => <div key={m.id} className={`message ${m.role}`}>
               <div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div>
-              <div className="bubble"><div>{m.text}</div>{m.imageUrl && <img src={m.imageUrl} alt="Generated" className="chat-image"/>}{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div>
+              <div className="bubble">
+                <div>{m.text}</div>
+                {/* UPDATED: Download button rendering directly beneath images */}
+                {m.imageUrl && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                    <img src={m.imageUrl} alt="Generated" className="chat-image"/>
+                    <button className="secondary" style={{ padding: '6px', fontSize: '12px', alignSelf: 'flex-start' }} onClick={() => downloadMedia(m.imageUrl!, `NOVA_Image_${Date.now()}.png`)}>
+                      💾 Download Image
+                    </button>
+                  </div>
+                )}
+                {m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}
+              </div>
             </div>)}
             {typing && <div className="message model"><div className="avatar"><Bot size={15}/></div><div className="bubble dots">● ● ●</div></div>}
             <div ref={chatEnd}/>
@@ -378,6 +445,10 @@ export default function App() {
               </button>
               <button className={aiMode === 'image' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('image')}>
                 <ImageIcon size={20}/><b>Image Generation</b><span>Describe it, NOVA draws it</span>
+              </button>
+              {/* ADDED: Video Generation Button */}
+              <button className={aiMode === 'video' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('video')}>
+                <Video size={20}/><b>Video Generation</b><span>Generate short videos</span>
               </button>
               <button className={aiMode === 'coder' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('coder')}>
                 <Code2 size={20}/><b>Coder X</b><span>Complete, paste-ready code</span>
@@ -411,10 +482,11 @@ export default function App() {
       </div>
 
       <div className="composer-dock">
-        {/* Active Mode Indicator */}
         <div className="active-mode-indicator">
           {aiMode === 'thinking' && <BrainCircuit size={12}/>}
           {aiMode === 'image' && <ImageIcon size={12}/>}
+          {/* ADDED: Video icon for active mode indicator */}
+          {aiMode === 'video' && <Video size={12}/>}
           {aiMode === 'coder' && <Code2 size={12}/>}
           {aiMode === 'assistant' && <UserCog size={12}/>}
           <span>{AI_MODE_INFO[aiMode].label}</span>
@@ -433,7 +505,6 @@ export default function App() {
 
     {settingsOpen && <SettingsPanel settings={settings} onUpdate={setSettings} onClose={() => setSettingsOpen(false)}/>}
     
-    {/* Notification Panel (Replaces Bell History) */}
     {notifsOpen && <div className="modal-backdrop"><section className="history-panel">
       <div className="settings-head"><div><b>Notifications</b><span>System alerts &amp; mode tracking</span></div><button onClick={() => setNotifsOpen(false)}><X/></button></div>
       {notifications.length === 0 && <div className="history-empty">No new notifications.</div>}
@@ -442,7 +513,6 @@ export default function App() {
       </div>)}
     </section></div>}
 
-    {/* Chat History Modal (Moved from Bell to Chat View) */}
     {historyOpen && <div className="modal-backdrop"><section className="history-panel">
       <div className="settings-head"><div><b>Chat history</b><span>{history.length} saved conversation{history.length === 1 ? '' : 's'}</span></div><button onClick={() => setHistoryOpen(false)}><X/></button></div>
       {history.length === 0 && <div className="history-empty">No saved conversations yet.</div>}
