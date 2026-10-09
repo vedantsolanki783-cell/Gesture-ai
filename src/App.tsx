@@ -218,7 +218,7 @@ export default function App() {
       return;
     }
 
-    // ADDED: Video logic with 1 min timeout
+    // ADDED: Video logic with 1 min timeout and real Hugging Face API call
     if (aiMode === 'video' && text) {
       setAttachments([]); setProvider('Video Generation (max 1m)');
       
@@ -226,14 +226,32 @@ export default function App() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 60000); // 1-minute strict limit
         
-        // Placeholder for real video API call
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // Call Hugging Face's free Text-to-Video API
+        const response = await fetch(
+          "https://api-inference.huggingface.co/models/ali-vilab/text-to-video-ms-1.7b",
+          {
+            headers: { 
+              "Authorization": "Bearer YOUR_HF_TOKEN_HERE", // Replace with your Hugging Face token
+              "Content-Type": "application/json" 
+            },
+            method: "POST",
+            body: JSON.stringify({ inputs: text }),
+            signal: controller.signal
+          }
+        );
         
         clearTimeout(timeoutId);
         
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Video generation initialized for: "${text}". (Connect your video API backend in the code here to see results).`, timestamp: Date.now() }]);
+        if (!response.ok) throw new Error('Video generation failed');
+        
+        // Convert the response to a playable video file
+        const blob = await response.blob();
+        const localVideoUrl = URL.createObjectURL(blob);
+        
+        // Use (as any) to bypass types.ts restrictions without breaking the app
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here is your generated video for: "${text}"`, videoUrl: localVideoUrl, timestamp: Date.now() } as any]);
       } catch (error) {
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: 'Video generation stopped: Exceeded 1 minute limit.', timestamp: Date.now() }]);
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: 'Video generation stopped: Exceeded 1 minute limit, or API key is missing.', timestamp: Date.now() }]);
       }
       setTyping(false);
       return;
@@ -425,6 +443,15 @@ export default function App() {
                     <img src={m.imageUrl} alt="Generated" className="chat-image"/>
                     <button className="secondary" style={{ padding: '6px', fontSize: '12px', alignSelf: 'flex-start' }} onClick={() => downloadMedia(m.imageUrl!, `NOVA_Image_${Date.now()}.png`)}>
                       💾 Download Image
+                    </button>
+                  </div>
+                )}
+                {/* ADDED: Video Player rendering directly beneath the image logic */}
+                {(m as any).videoUrl && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                    <video src={(m as any).videoUrl} controls autoPlay loop className="chat-image" style={{ maxWidth: '100%', borderRadius: '8px', backgroundColor: '#000' }}/>
+                    <button className="secondary" style={{ padding: '6px', fontSize: '12px', alignSelf: 'flex-start' }} onClick={() => downloadMedia((m as any).videoUrl, `NOVA_Video_${Date.now()}.mp4`)}>
+                      💾 Download Video
                     </button>
                   </div>
                 )}
