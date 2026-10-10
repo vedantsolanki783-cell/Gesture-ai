@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X, Video } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
@@ -218,20 +218,26 @@ export default function App() {
       return;
     }
 
-    // ADDED: Video logic with 1 min timeout and real Hugging Face API call
+    // SECURE UPDATE: Request Token via Prompt and save locally
     if (aiMode === 'video' && text) {
       setAttachments([]); setProvider('Video Generation (max 1m)');
       
       try {
+        let hfToken = localStorage.getItem('nova_hf_token');
+        if (!hfToken) {
+          hfToken = window.prompt("Security check: Enter your Hugging Face Access Token (starts with hf_):");
+          if (!hfToken) throw new Error('Token required for video generation.');
+          localStorage.setItem('nova_hf_token', hfToken.trim());
+        }
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 60000); // 1-minute strict limit
         
-        // Call Hugging Face's free Text-to-Video API
         const response = await fetch(
           "https://api-inference.huggingface.co/models/ali-vilab/text-to-video-ms-1.7b",
           {
             headers: { 
-              "Authorization": "Bearer YOUR_HF_TOKEN_HERE", // Replace with your Hugging Face token
+              "Authorization": `Bearer ${hfToken}`, 
               "Content-Type": "application/json" 
             },
             method: "POST",
@@ -242,16 +248,20 @@ export default function App() {
         
         clearTimeout(timeoutId);
         
-        if (!response.ok) throw new Error('Video generation failed');
+        if (!response.ok) {
+          if (response.status === 401) {
+            localStorage.removeItem('nova_hf_token');
+            throw new Error('Invalid API Key. It has been removed. Please try again.');
+          }
+          throw new Error('Video generation failed');
+        }
         
-        // Convert the response to a playable video file
         const blob = await response.blob();
         const localVideoUrl = URL.createObjectURL(blob);
         
-        // Use (as any) to bypass types.ts restrictions without breaking the app
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here is your generated video for: "${text}"`, videoUrl: localVideoUrl, timestamp: Date.now() } as any]);
-      } catch (error) {
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: 'Video generation stopped: Exceeded 1 minute limit, or API key is missing.', timestamp: Date.now() }]);
+      } catch (error: any) {
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: error.message || 'Video generation stopped: Exceeded 1 minute limit or failed.', timestamp: Date.now() }]);
       }
       setTyping(false);
       return;
