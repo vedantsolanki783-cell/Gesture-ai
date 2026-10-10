@@ -184,6 +184,15 @@ export default function App() {
 
   const send = useCallback(async (value = input) => {
     const text = value.trim(); if ((!text && attachments.length === 0) || typing) return;
+    
+    // SECRET COMMAND: Reset API Key Memory
+    if (text.toLowerCase() === 'reset key') {
+      localStorage.removeItem('nova_hf_token');
+      setInput(''); setAttachments([]); setProvider('System Update');
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: '✅ API Key erased from memory. Tap Generate Video to enter your new key.', timestamp: Date.now() }]);
+      return;
+    }
+
     const label = text || (attachments.length ? `[${attachments.length} file(s) attached]` : '');
     const user: Message = { id: crypto.randomUUID(), role: 'user', text: label, timestamp: Date.now() };
     setMessages(prev => [...prev, user]); setInput(''); setTyping(true);
@@ -198,17 +207,13 @@ export default function App() {
 
     if (aiMode === 'image' && text) {
       setAttachments([]); setProvider('Image Generation (max 40s)');
-      
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 40000);
-        
         const url = buildImageUrl(text);
         const response = await fetch(url, { signal: controller.signal });
         clearTimeout(timeoutId);
-        
         if (!response.ok) throw new Error('Generation failed');
-        
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here's your image for: "${text}"`, imageUrl: url, timestamp: Date.now() }]);
       } catch (error) {
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: 'Image generation stopped: Exceeded maximum time of 40 seconds or failed.', timestamp: Date.now() }]);
@@ -217,7 +222,7 @@ export default function App() {
       return;
     }
 
-    // DIRECT HUGGING FACE FIX with Smart Retry Loop
+    // DIRECT HUGGING FACE VIDEO FIX (No Proxies, Smart Retry Loop)
     if (aiMode === 'video' && text) {
       setAttachments([]); setProvider('Video Generation (Connecting...)');
       
@@ -227,7 +232,7 @@ export default function App() {
       try {
         let hfToken = localStorage.getItem('nova_hf_token');
         if (!hfToken) {
-          hfToken = window.prompt("Security check: Enter your Hugging Face Access Token (starts with hf_):");
+          hfToken = window.prompt("Enter your Hugging Face Access Token (starts with hf_):");
           if (!hfToken) throw new Error('Token required for video generation.');
           localStorage.setItem('nova_hf_token', hfToken.trim());
         }
@@ -239,7 +244,7 @@ export default function App() {
         let success = false;
         let attempts = 0;
 
-        // Loop to handle Hugging Face's "sleeping" server CORS bug
+        // Smart Loop to handle Hugging Face's "sleeping" server bug
         while (attempts < 10 && !success) {
           try {
             attempts++;
@@ -258,17 +263,17 @@ export default function App() {
               }
             );
             
-            // Server is explicitly saying it is loading
+            // Wait 15s if server says it is loading
             if (response.status === 503) {
-                await new Promise(r => setTimeout(r, 15000)); // wait 15 seconds and retry
+                await new Promise(r => setTimeout(r, 15000));
                 continue;
             }
             
             if (!response.ok) {
               const errorText = await response.text();
-              if (response.status === 401) {
+              if (response.status === 401 || response.status === 403) {
                 localStorage.removeItem('nova_hf_token');
-                throw new Error('Invalid API Key. It has been removed. Please try again with a fresh key.');
+                throw new Error('Invalid API Key. It has been removed. Type "reset key" and try again with a fresh key.');
               }
               throw new Error(`Hugging Face Error (${response.status}): ${errorText}`);
             }
@@ -276,21 +281,18 @@ export default function App() {
             success = true;
 
           } catch (err: any) {
-            // The browser translates HF's 503 (without CORS headers) into a fake "Failed to fetch"
+            // The browser sometimes translates the 503 sleep error into a fake "Failed to fetch"
             if (err.name === 'TypeError' && err.message === 'Failed to fetch') {
                 if (attempts >= 10) throw new Error("Server failed to wake up after 3 minutes. Please try again later.");
-                await new Promise(r => setTimeout(r, 15000)); // wait 15 seconds and retry
+                await new Promise(r => setTimeout(r, 15000)); 
             } else {
-                throw err; // Re-throw real errors (like timeout)
+                throw err; 
             }
           }
         }
         
         clearTimeout(timeoutId);
-        
-        if (!success || !response) {
-            throw new Error("Generation timed out or server failed to respond.");
-        }
+        if (!success || !response) throw new Error("Generation timed out or server failed to respond.");
         
         const blob = await response.blob();
         if (blob.type.includes('application/json')) {
@@ -300,14 +302,14 @@ export default function App() {
 
         const localVideoUrl = URL.createObjectURL(blob);
         
-        // Success: Replace the loading message with the video
+        // Success: Swap the loading message for the video player
         setMessages(prev => prev.map(m => m.id === loadingMsgId ? { ...m, text: `Here is your generated video for: "${text}"`, videoUrl: localVideoUrl } as any : m));
 
       } catch (error: any) {
         let finalErrorMsg = error.message || 'Unknown error occurred.';
         if (error.name === 'AbortError') finalErrorMsg = "Generation timed out after 3 minutes.";
         
-        // Update the loading message to show the error instead of the video
+        // Error: Swap the loading message for the error
         setMessages(prev => prev.map(m => m.id === loadingMsgId ? { ...m, text: `⚠️ Video Error: ${finalErrorMsg}` } : m));
       }
       setTyping(false);
