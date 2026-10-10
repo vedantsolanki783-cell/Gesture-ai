@@ -217,10 +217,13 @@ export default function App() {
       return;
     }
 
-    // CORS PROXY FIX: Routing the request through corsproxy.io to bypass the browser's block
+    // DIRECT HUGGING FACE FIX with Smart Retry Loop
     if (aiMode === 'video' && text) {
-      setAttachments([]); setProvider('Video Generation (max 3m)');
+      setAttachments([]); setProvider('Video Generation (Connecting...)');
       
+      const loadingMsgId = crypto.randomUUID();
+      setMessages(prev => [...prev, { id: loadingMsgId, role: 'model', text: `🎬 Starting video generation for: "${text}".\n\nPlease wait, this usually takes 2-3 minutes...`, timestamp: Date.now() }]);
+
       try {
         let hfToken = localStorage.getItem('nova_hf_token');
         if (!hfToken) {
@@ -230,39 +233,66 @@ export default function App() {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3-minute limit
+        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3-minute hard limit
         
-        // This proxy URL bypasses the strict browser CORS blocks safely
-        const targetUrl = encodeURIComponent("https://api-inference.huggingface.co/models/damo-vilab/text-to-video-ms-1.7b");
-        const proxyUrl = `https://corsproxy.io/?${targetUrl}`;
-        
-        const response = await fetch(proxyUrl, {
-            headers: { 
-              "Authorization": `Bearer ${hfToken}`, 
-              "Content-Type": "application/json"
-            },
-            method: "POST",
-            body: JSON.stringify({ inputs: text }),
-            signal: controller.signal
+        let response;
+        let success = false;
+        let attempts = 0;
+
+        // Loop to handle Hugging Face's "sleeping" server CORS bug
+        while (attempts < 10 && !success) {
+          try {
+            attempts++;
+            setProvider(`Waking up server (Attempt ${attempts}/10)...`);
+
+            response = await fetch(
+              "https://api-inference.huggingface.co/models/damo-vilab/text-to-video-ms-1.7b",
+              {
+                headers: { 
+                  "Authorization": `Bearer ${hfToken}`, 
+                  "Content-Type": "application/json"
+                },
+                method: "POST",
+                body: JSON.stringify({ inputs: text }),
+                signal: controller.signal
+              }
+            );
+            
+            // Server is explicitly saying it is loading
+            if (response.status === 503) {
+                await new Promise(r => setTimeout(r, 15000)); // wait 15 seconds and retry
+                continue;
+            }
+            
+            if (!response.ok) {
+              const errorText = await response.text();
+              if (response.status === 401) {
+                localStorage.removeItem('nova_hf_token');
+                throw new Error('Invalid API Key. It has been removed. Please try again with a fresh key.');
+              }
+              throw new Error(`Hugging Face Error (${response.status}): ${errorText}`);
+            }
+            
+            success = true;
+
+          } catch (err: any) {
+            // The browser translates HF's 503 (without CORS headers) into a fake "Failed to fetch"
+            if (err.name === 'TypeError' && err.message === 'Failed to fetch') {
+                if (attempts >= 10) throw new Error("Server failed to wake up after 3 minutes. Please try again later.");
+                await new Promise(r => setTimeout(r, 15000)); // wait 15 seconds and retry
+            } else {
+                throw err; // Re-throw real errors (like timeout)
+            }
           }
-        );
+        }
         
         clearTimeout(timeoutId);
         
-        if (!response.ok) {
-          const errorText = await response.text();
-          if (response.status === 401) {
-            localStorage.removeItem('nova_hf_token');
-            throw new Error('Invalid API Key. It has been removed. Please try again with a fresh key.');
-          }
-          if (response.status === 503) {
-            throw new Error('Server is currently waking up. Please wait 30 seconds and try generating again!');
-          }
-          throw new Error(`Hugging Face Error (${response.status}): ${errorText}`);
+        if (!success || !response) {
+            throw new Error("Generation timed out or server failed to respond.");
         }
         
         const blob = await response.blob();
-        
         if (blob.type.includes('application/json')) {
             const errorData = await blob.text();
             throw new Error(`API Error: ${errorData}`);
@@ -270,15 +300,15 @@ export default function App() {
 
         const localVideoUrl = URL.createObjectURL(blob);
         
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here is your generated video for: "${text}"`, videoUrl: localVideoUrl, timestamp: Date.now() } as any]);
+        // Success: Replace the loading message with the video
+        setMessages(prev => prev.map(m => m.id === loadingMsgId ? { ...m, text: `Here is your generated video for: "${text}"`, videoUrl: localVideoUrl } as any : m));
+
       } catch (error: any) {
         let finalErrorMsg = error.message || 'Unknown error occurred.';
+        if (error.name === 'AbortError') finalErrorMsg = "Generation timed out after 3 minutes.";
         
-        if (error.name === 'AbortError') {
-            finalErrorMsg = "Generation timed out. The server took longer than 3 minutes to process the video.";
-        }
-        
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `⚠️ Video Error: ${finalErrorMsg}`, timestamp: Date.now() }]);
+        // Update the loading message to show the error instead of the video
+        setMessages(prev => prev.map(m => m.id === loadingMsgId ? { ...m, text: `⚠️ Video Error: ${finalErrorMsg}` } : m));
       }
       setTyping(false);
       return;
@@ -463,7 +493,7 @@ export default function App() {
             {messages.map(m => <div key={m.id} className={`message ${m.role}`}>
               <div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div>
               <div className="bubble">
-                <div>{m.text}</div>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
                 {/* UPDATED: Download button rendering directly beneath images */}
                 {m.imageUrl && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
