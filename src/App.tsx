@@ -217,9 +217,9 @@ export default function App() {
       return;
     }
 
-    // NEW FIX: Increased timeout to 3 minutes, added model wake-up command, and precise error handling
+    // CORS FIX: Removed the custom header that triggers browser blocks, changed model repo to the official one
     if (aiMode === 'video' && text) {
-      setAttachments([]); setProvider('Video Generation (Server waking up...)');
+      setAttachments([]); setProvider('Video Generation (max 3m)');
       
       try {
         let hfToken = localStorage.getItem('nova_hf_token');
@@ -230,15 +230,15 @@ export default function App() {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3-minute strict limit
+        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3-minute limit
         
+        // Removed custom headers entirely so the browser allows it safely
         const response = await fetch(
-          "https://api-inference.huggingface.co/models/ali-vilab/text-to-video-ms-1.7b",
+          "https://api-inference.huggingface.co/models/damo-vilab/text-to-video-ms-1.7b",
           {
             headers: { 
               "Authorization": `Bearer ${hfToken}`, 
-              "Content-Type": "application/json",
-              "x-wait-for-model": "true" // Forces the Hugging Face server to wake up
+              "Content-Type": "application/json"
             },
             method: "POST",
             body: JSON.stringify({ inputs: text }),
@@ -248,38 +248,37 @@ export default function App() {
         
         clearTimeout(timeoutId);
         
-        // Grab exact errors so we aren't guessing
+        // Exact error handling so it doesn't just say "Failed to fetch"
         if (!response.ok) {
           const errorText = await response.text();
           if (response.status === 401) {
             localStorage.removeItem('nova_hf_token');
-            throw new Error('Invalid API Key. It has been removed from memory. Please try again with a fresh key.');
+            throw new Error('Invalid API Key. It has been removed. Please try again with a fresh key.');
           }
-          throw new Error(`Hugging Face Server Error (${response.status}): ${errorText}`);
+          if (response.status === 503) {
+            throw new Error('Server is currently waking up. Please wait 30 seconds and try generating again!');
+          }
+          throw new Error(`Hugging Face Error (${response.status}): ${errorText}`);
         }
-
-        // Check if HF returned an error JSON instead of a video blob
+        
         const blob = await response.blob();
+        
+        // Double check if Hugging face returned an error disguised as a success
         if (blob.type.includes('application/json')) {
             const errorData = await blob.text();
             throw new Error(`API Error: ${errorData}`);
         }
-        
+
         const localVideoUrl = URL.createObjectURL(blob);
         
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here is your generated video for: "${text}"`, videoUrl: localVideoUrl, timestamp: Date.now() } as any]);
       } catch (error: any) {
         let finalErrorMsg = error.message || 'Unknown error occurred.';
         
-        // Translate the obscure 'AbortError' into plain English
         if (error.name === 'AbortError') {
             finalErrorMsg = "Generation timed out. The server took longer than 3 minutes to process the video.";
         }
-        // Translate browser CORS blocks
-        else if (error.message === 'Failed to fetch') {
-            finalErrorMsg = "Browser Blocked (CORS): Your browser blocked the connection to Hugging Face, or the server is completely down.";
-        }
-
+        
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `⚠️ Video Error: ${finalErrorMsg}`, timestamp: Date.now() }]);
       }
       setTyping(false);
