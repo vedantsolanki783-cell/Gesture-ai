@@ -1,4 +1,4 @@
- import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X, Video } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
@@ -53,7 +53,7 @@ const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruc
     systemInstruction: 'Think step-by-step before answering: break the problem down, weigh alternatives or edge cases, then give one clear, well-reasoned final answer.'
   },
   image: { label: 'Image Generation', blurb: 'Describe a picture and NOVA will generate it (max 40s).' },
-  video: { label: 'Video Generation', blurb: 'Generate short videos from a text prompt (max 1m).' },
+  video: { label: 'Video Generation', blurb: 'Generate short videos from a text prompt (max 3m).' },
   coder: {
     label: 'Coder X',
     blurb: 'A focused coding assistant — complete, copy-paste-ready code with brief explanations.',
@@ -196,13 +196,12 @@ export default function App() {
       return;
     }
 
-    // UPDATED: Image logic with 40s timeout
     if (aiMode === 'image' && text) {
       setAttachments([]); setProvider('Image Generation (max 40s)');
       
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 40000); // 40-second strict limit
+        const timeoutId = setTimeout(() => controller.abort(), 40000);
         
         const url = buildImageUrl(text);
         const response = await fetch(url, { signal: controller.signal });
@@ -218,9 +217,9 @@ export default function App() {
       return;
     }
 
-    // SECURE UPDATE: Request Token via Prompt and save locally
+    // NEW FIX: Increased timeout to 3 minutes, added model wake-up command, and precise error handling
     if (aiMode === 'video' && text) {
-      setAttachments([]); setProvider('Video Generation (max 1m)');
+      setAttachments([]); setProvider('Video Generation (Server waking up...)');
       
       try {
         let hfToken = localStorage.getItem('nova_hf_token');
@@ -231,14 +230,15 @@ export default function App() {
         }
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000); // 1-minute strict limit
+        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3-minute strict limit
         
         const response = await fetch(
           "https://api-inference.huggingface.co/models/ali-vilab/text-to-video-ms-1.7b",
           {
             headers: { 
               "Authorization": `Bearer ${hfToken}`, 
-              "Content-Type": "application/json" 
+              "Content-Type": "application/json",
+              "x-wait-for-model": "true" // Forces the Hugging Face server to wake up
             },
             method: "POST",
             body: JSON.stringify({ inputs: text }),
@@ -248,20 +248,39 @@ export default function App() {
         
         clearTimeout(timeoutId);
         
+        // Grab exact errors so we aren't guessing
         if (!response.ok) {
+          const errorText = await response.text();
           if (response.status === 401) {
             localStorage.removeItem('nova_hf_token');
-            throw new Error('Invalid API Key. It has been removed. Please try again.');
+            throw new Error('Invalid API Key. It has been removed from memory. Please try again with a fresh key.');
           }
-          throw new Error('Video generation failed');
+          throw new Error(`Hugging Face Server Error (${response.status}): ${errorText}`);
+        }
+
+        // Check if HF returned an error JSON instead of a video blob
+        const blob = await response.blob();
+        if (blob.type.includes('application/json')) {
+            const errorData = await blob.text();
+            throw new Error(`API Error: ${errorData}`);
         }
         
-        const blob = await response.blob();
         const localVideoUrl = URL.createObjectURL(blob);
         
         setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here is your generated video for: "${text}"`, videoUrl: localVideoUrl, timestamp: Date.now() } as any]);
       } catch (error: any) {
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: error.message || 'Video generation stopped: Exceeded 1 minute limit or failed.', timestamp: Date.now() }]);
+        let finalErrorMsg = error.message || 'Unknown error occurred.';
+        
+        // Translate the obscure 'AbortError' into plain English
+        if (error.name === 'AbortError') {
+            finalErrorMsg = "Generation timed out. The server took longer than 3 minutes to process the video.";
+        }
+        // Translate browser CORS blocks
+        else if (error.message === 'Failed to fetch') {
+            finalErrorMsg = "Browser Blocked (CORS): Your browser blocked the connection to Hugging Face, or the server is completely down.";
+        }
+
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `⚠️ Video Error: ${finalErrorMsg}`, timestamp: Date.now() }]);
       }
       setTyping(false);
       return;
