@@ -217,7 +217,7 @@ export default function App() {
       return;
     }
 
-    // CORS FIX: Removed the custom header that triggers browser blocks, changed model repo to the official one
+    // CORS PROXY FIX: Routing the request through corsproxy.io to bypass the browser's block
     if (aiMode === 'video' && text) {
       setAttachments([]); setProvider('Video Generation (max 3m)');
       
@@ -232,10 +232,11 @@ export default function App() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 180000); // 3-minute limit
         
-        // Removed custom headers entirely so the browser allows it safely
-        const response = await fetch(
-          "https://api-inference.huggingface.co/models/damo-vilab/text-to-video-ms-1.7b",
-          {
+        // This proxy URL bypasses the strict browser CORS blocks safely
+        const targetUrl = encodeURIComponent("https://api-inference.huggingface.co/models/damo-vilab/text-to-video-ms-1.7b");
+        const proxyUrl = `https://corsproxy.io/?${targetUrl}`;
+        
+        const response = await fetch(proxyUrl, {
             headers: { 
               "Authorization": `Bearer ${hfToken}`, 
               "Content-Type": "application/json"
@@ -248,7 +249,6 @@ export default function App() {
         
         clearTimeout(timeoutId);
         
-        // Exact error handling so it doesn't just say "Failed to fetch"
         if (!response.ok) {
           const errorText = await response.text();
           if (response.status === 401) {
@@ -263,7 +263,6 @@ export default function App() {
         
         const blob = await response.blob();
         
-        // Double check if Hugging face returned an error disguised as a success
         if (blob.type.includes('application/json')) {
             const errorData = await blob.text();
             throw new Error(`API Error: ${errorData}`);
