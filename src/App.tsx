@@ -60,10 +60,6 @@ const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruc
   }
 };
 
-function buildImageUrl(prompt: string): string {
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
-}
-
 function Ring({ percent, color, label, value }: { percent: number; color: string; label: string; value: string }) {
   const r = 26; const c = 2 * Math.PI * r;
   const pct = Math.max(0, Math.min(100, percent));
@@ -177,9 +173,26 @@ export default function App() {
     }
 
     if (aiMode === 'image' && text) {
-      setAttachments([]); setProvider('Image Generation • Pollinations (free)');
-      const url = buildImageUrl(text);
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here's your image for: "${text}"`, imageUrl: url, timestamp: Date.now() }]);
+      setAttachments([]); setProvider('Image Generation • Hugging Face');
+      try {
+        const response = await fetch("https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0", {
+          method: "POST",
+          headers: {
+            "Authorization": "Bearer Hf_yceXkbyXUCHpZXiRzQlJTFHwfpkpToQFVy",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ inputs: text })
+        });
+        
+        if (!response.ok) throw new Error('Failed to generate image');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here's your image for: "${text}"`, imageUrl: url, timestamp: Date.now() }]);
+      } catch (error) {
+        console.error("Hugging Face API Error:", error);
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: "Sorry, I couldn't generate the image.", timestamp: Date.now() }]);
+      }
       setTyping(false);
       return;
     }
