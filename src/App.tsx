@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X } from 'lucide-react';
+import { BrainCircuit, Bell, Bot, Code2, Copy, Download, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
 import type { MessageAttachment } from './services/hybridAI';
@@ -60,7 +60,22 @@ const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruc
   }
 };
 
-// Brought back the Pollinations URL with the FLUX model parameter
+// Helper to download the generated image safely on Android
+const downloadImage = async (url: string) => {
+  try {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `NOVA_Image_${Date.now()}.jpg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (err) {
+    window.open(url, '_blank');
+  }
+};
+
 function buildImageUrl(prompt: string): string {
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&model=flux&nologo=true`;
 }
@@ -177,7 +192,6 @@ export default function App() {
       return;
     }
 
-    // Switched back to Pollinations FLUX implementation
     if (aiMode === 'image' && text) {
       setAttachments([]); setProvider('Image Generation • Pollinations (FLUX)');
       const url = buildImageUrl(text);
@@ -364,7 +378,16 @@ export default function App() {
           <div className="messages">
             {messages.map(m => <div key={m.id} className={`message ${m.role}`}>
               <div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div>
-              <div className="bubble"><div>{m.text}</div>{m.imageUrl && <img src={m.imageUrl} alt="Generated" className="chat-image"/>}{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div>
+              <div className="bubble">
+                <div>{m.text}</div>
+                {m.imageUrl && <img src={m.imageUrl} alt="Generated" className="chat-image"/>}
+                {m.role === 'model' && (
+                  <>
+                    <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)} title="Copy Text"><Copy size={13}/></button>
+                    {m.imageUrl && <button className="copy" style={{ right: '40px' }} onClick={() => downloadImage(m.imageUrl!)} title="Download Image"><Download size={13}/></button>}
+                  </>
+                )}
+              </div>
             </div>)}
             {typing && <div className="message model"><div className="avatar"><Bot size={15}/></div><div className="bubble dots">● ● ●</div></div>}
             <div ref={chatEnd}/>
