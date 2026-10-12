@@ -383,8 +383,8 @@ export default function App() {
                 {m.imageUrl && <img src={m.imageUrl} alt="Generated" className="chat-image"/>}
                 {m.role === 'model' && (
                   <>
-                    <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)} title="Copy Text"><Copy size={13}/></button>
-                    {m.imageUrl && <button className="copy" style={{ right: '40px' }} onClick={() => downloadImage(m.imageUrl!)} title="Download Image"><Download size={13}/></button>}
+                    <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)} title="Copy Text"><Copy size={15}/></button>
+                    {m.imageUrl && <button className="copy" style={{ right: '52px' }} onClick={() => downloadImage(m.imageUrl!)} title="Download Image"><Download size={15}/></button>}
                   </>
                 )}
               </div>
