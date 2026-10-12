@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X, Video } from 'lucide-react';
+import { BrainCircuit, Bell, Bot, Code2, Copy, Eye, Hand, History, Home, Image as ImageIcon, Menu, Mic, MicOff, MessageSquare, Moon, Paperclip, Plus, Send, Settings, Smartphone, Sparkles, Sun, User, UserCog, Wand2, X } from 'lucide-react';
 import { generateLocalOrCloud } from './services/aiRouter';
 import { parseUploadedFile } from './services/fileReader';
 import type { MessageAttachment } from './services/hybridAI';
@@ -43,7 +43,7 @@ interface AppNotification { id: string; text: string; time: number; }
 const WELCOME: Message = { id: 'welcome', role: 'model', text: 'Hello. I am NOVA Gesture AI.\n\nI can combine local sign recognition, custom gestures and an AI model. You can also teach me new hand signs below the camera.', timestamp: Date.now() };
 
 type View = 'home' | 'vision' | 'chat' | 'devices' | 'aitools';
-type AiMode = 'assistant' | 'thinking' | 'image' | 'video' | 'coder';
+type AiMode = 'assistant' | 'thinking' | 'image' | 'coder';
 
 const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruction?: string }> = {
   assistant: { label: 'Personal Assistant', blurb: 'General help, chat and device control — NOVA\'s default mode.' },
@@ -52,8 +52,7 @@ const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruc
     blurb: 'Slower, more thorough reasoning for hard or multi-step questions.',
     systemInstruction: 'Think step-by-step before answering: break the problem down, weigh alternatives or edge cases, then give one clear, well-reasoned final answer.'
   },
-  image: { label: 'Image Generation', blurb: 'Describe a picture and NOVA will generate it (max 40s).' },
-  video: { label: 'Video Generation', blurb: 'Generate short videos from a text prompt (max 3m).' },
+  image: { label: 'Image Generation', blurb: 'Describe a picture and NOVA will generate it (free, no API key).' },
   coder: {
     label: 'Coder X',
     blurb: 'A focused coding assistant — complete, copy-paste-ready code with brief explanations.',
@@ -64,25 +63,6 @@ const AI_MODE_INFO: Record<AiMode, { label: string; blurb: string; systemInstruc
 function buildImageUrl(prompt: string): string {
   return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&nologo=true`;
 }
-
-// Added Download Helper Function
-const downloadMedia = async (url: string, filename: string) => {
-  try {
-    const response = await fetch(url);
-    const blob = await response.blob();
-    const blobUrl = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(blobUrl);
-  } catch (err) {
-    console.error('Download failed:', err);
-    alert('Failed to download file.');
-  }
-};
 
 function Ring({ percent, color, label, value }: { percent: number; color: string; label: string; value: string }) {
   const r = 26; const c = 2 * Math.PI * r;
@@ -184,15 +164,6 @@ export default function App() {
 
   const send = useCallback(async (value = input) => {
     const text = value.trim(); if ((!text && attachments.length === 0) || typing) return;
-    
-    // SECRET COMMAND: Reset API Key Memory
-    if (text.toLowerCase() === 'reset key') {
-      localStorage.removeItem('nova_hf_token');
-      setInput(''); setAttachments([]); setProvider('System Update');
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: '✅ API Key erased from memory. Tap Generate Video to enter your new key.', timestamp: Date.now() }]);
-      return;
-    }
-
     const label = text || (attachments.length ? `[${attachments.length} file(s) attached]` : '');
     const user: Message = { id: crypto.randomUUID(), role: 'user', text: label, timestamp: Date.now() };
     setMessages(prev => [...prev, user]); setInput(''); setTyping(true);
@@ -206,112 +177,9 @@ export default function App() {
     }
 
     if (aiMode === 'image' && text) {
-      setAttachments([]); setProvider('Image Generation (max 40s)');
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 40000);
-        const url = buildImageUrl(text);
-        const response = await fetch(url, { signal: controller.signal });
-        clearTimeout(timeoutId);
-        if (!response.ok) throw new Error('Generation failed');
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here's your image for: "${text}"`, imageUrl: url, timestamp: Date.now() }]);
-      } catch (error) {
-        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: 'Image generation stopped: Exceeded maximum time of 40 seconds or failed.', timestamp: Date.now() }]);
-      }
-      setTyping(false);
-      return;
-    }
-
-    // DIRECT HUGGING FACE VIDEO FIX (No Proxies, Smart Retry Loop)
-    if (aiMode === 'video' && text) {
-      setAttachments([]); setProvider('Video Generation (Connecting...)');
-      
-      const loadingMsgId = crypto.randomUUID();
-      setMessages(prev => [...prev, { id: loadingMsgId, role: 'model', text: `🎬 Starting video generation for: "${text}".\n\nPlease wait, this usually takes 2-3 minutes...`, timestamp: Date.now() }]);
-
-      try {
-        let hfToken = localStorage.getItem('nova_hf_token');
-        if (!hfToken) {
-          hfToken = window.prompt("Enter your Hugging Face Access Token (starts with hf_):");
-          if (!hfToken) throw new Error('Token required for video generation.');
-          localStorage.setItem('nova_hf_token', hfToken.trim());
-        }
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3-minute hard limit
-        
-        let response;
-        let success = false;
-        let attempts = 0;
-
-        // Smart Loop to handle Hugging Face's "sleeping" server bug
-        while (attempts < 10 && !success) {
-          try {
-            attempts++;
-            setProvider(`Waking up server (Attempt ${attempts}/10)...`);
-
-            response = await fetch(
-              "https://api-inference.huggingface.co/models/damo-vilab/text-to-video-ms-1.7b",
-              {
-                headers: { 
-                  "Authorization": `Bearer ${hfToken}`, 
-                  "Content-Type": "application/json"
-                },
-                method: "POST",
-                body: JSON.stringify({ inputs: text }),
-                signal: controller.signal
-              }
-            );
-            
-            // Wait 15s if server says it is loading
-            if (response.status === 503) {
-                await new Promise(r => setTimeout(r, 15000));
-                continue;
-            }
-            
-            if (!response.ok) {
-              const errorText = await response.text();
-              if (response.status === 401 || response.status === 403) {
-                localStorage.removeItem('nova_hf_token');
-                throw new Error('Invalid API Key. It has been removed. Type "reset key" and try again with a fresh key.');
-              }
-              throw new Error(`Hugging Face Error (${response.status}): ${errorText}`);
-            }
-            
-            success = true;
-
-          } catch (err: any) {
-            // The browser sometimes translates the 503 sleep error into a fake "Failed to fetch"
-            if (err.name === 'TypeError' && err.message === 'Failed to fetch') {
-                if (attempts >= 10) throw new Error("Server failed to wake up after 3 minutes. Please try again later.");
-                await new Promise(r => setTimeout(r, 15000)); 
-            } else {
-                throw err; 
-            }
-          }
-        }
-        
-        clearTimeout(timeoutId);
-        if (!success || !response) throw new Error("Generation timed out or server failed to respond.");
-        
-        const blob = await response.blob();
-        if (blob.type.includes('application/json')) {
-            const errorData = await blob.text();
-            throw new Error(`API Error: ${errorData}`);
-        }
-
-        const localVideoUrl = URL.createObjectURL(blob);
-        
-        // Success: Swap the loading message for the video player
-        setMessages(prev => prev.map(m => m.id === loadingMsgId ? { ...m, text: `Here is your generated video for: "${text}"`, videoUrl: localVideoUrl } as any : m));
-
-      } catch (error: any) {
-        let finalErrorMsg = error.message || 'Unknown error occurred.';
-        if (error.name === 'AbortError') finalErrorMsg = "Generation timed out after 3 minutes.";
-        
-        // Error: Swap the loading message for the error
-        setMessages(prev => prev.map(m => m.id === loadingMsgId ? { ...m, text: `⚠️ Video Error: ${finalErrorMsg}` } : m));
-      }
+      setAttachments([]); setProvider('Image Generation • Pollinations (free)');
+      const url = buildImageUrl(text);
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'model', text: `Here's your image for: "${text}"`, imageUrl: url, timestamp: Date.now() }]);
       setTyping(false);
       return;
     }
@@ -494,28 +362,7 @@ export default function App() {
           <div className="messages">
             {messages.map(m => <div key={m.id} className={`message ${m.role}`}>
               <div className="avatar">{m.role === 'user' ? <User size={15}/> : <Bot size={15}/>}</div>
-              <div className="bubble">
-                <div style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
-                {/* UPDATED: Download button rendering directly beneath images */}
-                {m.imageUrl && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
-                    <img src={m.imageUrl} alt="Generated" className="chat-image"/>
-                    <button className="secondary" style={{ padding: '6px', fontSize: '12px', alignSelf: 'flex-start' }} onClick={() => downloadMedia(m.imageUrl!, `NOVA_Image_${Date.now()}.png`)}>
-                      💾 Download Image
-                    </button>
-                  </div>
-                )}
-                {/* ADDED: Video Player rendering directly beneath the image logic */}
-                {(m as any).videoUrl && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
-                    <video src={(m as any).videoUrl} controls autoPlay loop className="chat-image" style={{ maxWidth: '100%', borderRadius: '8px', backgroundColor: '#000' }}/>
-                    <button className="secondary" style={{ padding: '6px', fontSize: '12px', alignSelf: 'flex-start' }} onClick={() => downloadMedia((m as any).videoUrl, `NOVA_Video_${Date.now()}.mp4`)}>
-                      💾 Download Video
-                    </button>
-                  </div>
-                )}
-                {m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}
-              </div>
+              <div className="bubble"><div>{m.text}</div>{m.imageUrl && <img src={m.imageUrl} alt="Generated" className="chat-image"/>}{m.role === 'model' && <button className="copy" onClick={() => navigator.clipboard?.writeText(m.text)}><Copy size={13}/></button>}</div>
             </div>)}
             {typing && <div className="message model"><div className="avatar"><Bot size={15}/></div><div className="bubble dots">● ● ●</div></div>}
             <div ref={chatEnd}/>
@@ -531,10 +378,6 @@ export default function App() {
               </button>
               <button className={aiMode === 'image' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('image')}>
                 <ImageIcon size={20}/><b>Image Generation</b><span>Describe it, NOVA draws it</span>
-              </button>
-              {/* ADDED: Video Generation Button */}
-              <button className={aiMode === 'video' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('video')}>
-                <Video size={20}/><b>Video Generation</b><span>Generate short videos</span>
               </button>
               <button className={aiMode === 'coder' ? 'quick-card active' : 'quick-card'} onClick={() => switchAiMode('coder')}>
                 <Code2 size={20}/><b>Coder X</b><span>Complete, paste-ready code</span>
@@ -568,11 +411,10 @@ export default function App() {
       </div>
 
       <div className="composer-dock">
+        {/* Active Mode Indicator */}
         <div className="active-mode-indicator">
           {aiMode === 'thinking' && <BrainCircuit size={12}/>}
           {aiMode === 'image' && <ImageIcon size={12}/>}
-          {/* ADDED: Video icon for active mode indicator */}
-          {aiMode === 'video' && <Video size={12}/>}
           {aiMode === 'coder' && <Code2 size={12}/>}
           {aiMode === 'assistant' && <UserCog size={12}/>}
           <span>{AI_MODE_INFO[aiMode].label}</span>
@@ -591,6 +433,7 @@ export default function App() {
 
     {settingsOpen && <SettingsPanel settings={settings} onUpdate={setSettings} onClose={() => setSettingsOpen(false)}/>}
     
+    {/* Notification Panel (Replaces Bell History) */}
     {notifsOpen && <div className="modal-backdrop"><section className="history-panel">
       <div className="settings-head"><div><b>Notifications</b><span>System alerts &amp; mode tracking</span></div><button onClick={() => setNotifsOpen(false)}><X/></button></div>
       {notifications.length === 0 && <div className="history-empty">No new notifications.</div>}
@@ -599,6 +442,7 @@ export default function App() {
       </div>)}
     </section></div>}
 
+    {/* Chat History Modal (Moved from Bell to Chat View) */}
     {historyOpen && <div className="modal-backdrop"><section className="history-panel">
       <div className="settings-head"><div><b>Chat history</b><span>{history.length} saved conversation{history.length === 1 ? '' : 's'}</span></div><button onClick={() => setHistoryOpen(false)}><X/></button></div>
       {history.length === 0 && <div className="history-empty">No saved conversations yet.</div>}
